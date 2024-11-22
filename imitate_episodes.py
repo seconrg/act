@@ -10,16 +10,26 @@ from einops import rearrange
 
 from constants import DT
 from constants import PUPPET_GRIPPER_JOINT_OPEN
-from utils import load_data # data functions
+from utils import load_data, load_data_euroc, load_test_euroc # data functions
 from utils import sample_box_pose, sample_insertion_pose # robot functions
 from utils import compute_dict_mean, set_seed, detach_dict # helper functions
 from policy import ACTPolicy, CNNMLPPolicy
 from visualize_episodes import save_videos
 
+import csv
+import time
+import pandas as pd
+
+import sys
+sys.path.append('/home/wuhaolu/Documents/pose_prediction/')
+from PosePrediction.Utils import * 
+
 from sim_env import BOX_POSE
 
 import IPython
 e = IPython.embed
+
+prediction_window = [0, 10, 18, 45, 90]
 
 def main(args):
     set_seed(1)
@@ -47,7 +57,7 @@ def main(args):
     camera_names = task_config['camera_names']
 
     # fixed parameters
-    state_dim = 14
+    state_dim = 7
     lr_backbone = 1e-5
     backbone = 'resnet18'
     if policy_class == 'ACT':
@@ -92,22 +102,24 @@ def main(args):
         ckpt_names = [f'policy_best.ckpt']
         results = []
         for ckpt_name in ckpt_names:
-            success_rate, avg_return = eval_bc(config, ckpt_name, save_episode=True)
-            results.append([ckpt_name, success_rate, avg_return])
+            # success_rate, avg_return = eval_bc(config, ckpt_name, save_episode=True)
+            eval_bc_euroc(config, ckpt_name)
+            # results.append([ckpt_name, success_rate, avg_return])
 
-        for ckpt_name, success_rate, avg_return in results:
-            print(f'{ckpt_name}: {success_rate=} {avg_return=}')
+        # for ckpt_name, success_rate, avg_return in results:
+        #     print(f'{ckpt_name}: {success_rate=} {avg_return=}')
         print()
         exit()
+    # train_dataloader, val_dataloader, stats, _ = load_data(dataset_dir, num_episodes, camera_names, batch_size_train, batch_size_val)
 
-    train_dataloader, val_dataloader, stats, _ = load_data(dataset_dir, num_episodes, camera_names, batch_size_train, batch_size_val)
-
-    # save dataset stats
-    if not os.path.isdir(ckpt_dir):
-        os.makedirs(ckpt_dir)
-    stats_path = os.path.join(ckpt_dir, f'dataset_stats.pkl')
-    with open(stats_path, 'wb') as f:
-        pickle.dump(stats, f)
+    # # save dataset stats
+    # if not os.path.isdir(ckpt_dir):
+    #     os.makedirs(ckpt_dir)
+    # stats_path = os.path.join(ckpt_dir, f'dataset_stats.pkl')
+    # with open(stats_path, 'wb') as f:
+    #     pickle.dump(stats, f)
+    print("Batch size in train is ", batch_size_train)
+    train_dataloader, val_dataloader, _, _ = load_data_euroc(num_episodes, batch_size_train, batch_size_val)
 
     best_ckpt_info = train_bc(train_dataloader, val_dataloader, config)
     best_epoch, min_val_loss, best_state_dict = best_ckpt_info
@@ -146,6 +158,153 @@ def get_image(ts, camera_names):
     curr_image = np.stack(curr_images, axis=0)
     curr_image = torch.from_numpy(curr_image / 255.0).float().cuda().unsqueeze(0)
     return curr_image
+
+
+def eval_bc_euroc(config, ckpt_name):
+    set_seed(1000)
+    ckpt_dir = config['ckpt_dir']
+    state_dim = config['state_dim']
+    real_robot = config['real_robot']
+    policy_class = config['policy_class']
+    onscreen_render = config['onscreen_render']
+    policy_config = config['policy_config']
+    camera_names = config['camera_names']
+    max_timesteps = config['episode_len']
+    task_name = config['task_name']
+    temporal_agg = config['temporal_agg']
+    onscreen_cam = 'angle'
+
+    # load policy and stats
+    ckpt_path = os.path.join(ckpt_dir, ckpt_name)
+    policy = make_policy(policy_class, policy_config)
+    loading_status = policy.load_state_dict(torch.load(ckpt_path))
+    print(loading_status)
+    policy.cuda()
+    policy.eval()
+    print(f'Loaded: {ckpt_path}')
+
+    # get the dataset
+    dataset = load_test_euroc()
+
+    groundtruth = dataset.getGroundtruth()
+    slam_output = dataset.getSlamSource()
+
+    gt_length = len(groundtruth)
+
+    query_frequency = policy_config['num_queries']
+    if temporal_agg:
+        query_frequency = 1
+        num_queries = policy_config['num_queries']
+
+    if temporal_agg:
+        all_time_actions = torch.zeros([max_timesteps, max_timesteps+num_queries, state_dim]).cuda()
+
+    with torch.inference_mode():
+        
+        fig, ax = plt.subplots()
+
+        print(gt_length)
+        # print("num queries:", num_queries)
+
+        
+        action_windows = [[] for _ in range(len(prediction_window))]
+
+        batch_size = 10
+
+        for t in range(0, gt_length, batch_size):
+        # for t in range(100):
+            print(t)
+
+            image, qpos = dataset.getImagePoseAt(t, batch_size)
+            print(image.shape)
+            
+            time_begin = time.time_ns()
+            all_actions = policy(qpos, image)
+            time_end = time.time_ns()
+            print("Inference time:", (time_end - time_begin) / 1000000, " ms")
+            
+            # We aim at the target of different prediction window
+            for i, window in enumerate(prediction_window):
+                raw_action = all_actions[:, window].squeeze(0).cpu().numpy()
+                # print(raw_action.shape)
+                action_windows[i].extend(raw_action)
+                # print(action_windows[i])
+        # Dump the current result 
+
+        for window, action_window in zip(prediction_window, action_windows):
+            with open("res_" + str(window) + ".csv", "w") as res:
+                res.write("x, y, z, w, x, y, z\n")
+                csv_writer = csv.writer(res)
+                csv_writer.writerows(action_window)
+
+        # Compute the pose error rate
+        for i, window in enumerate(prediction_window):
+            raw_actions = action_windows[i]
+            pose_diff_list, angle_diff_list = computePoseDiffFromNumpy(raw_actions[:-window], groundtruth[window:])
+
+            data_sorted = np.sort(pose_diff_list)
+            cdf = np.arange(1, len(data_sorted) + 1) / len(data_sorted)
+            ax.plot(data_sorted, cdf, label="Phase2 error rate with window " + str(window))
+
+        # Draw the source errors
+        pose_diff_computed_slam_and_gt_slam, \
+        angle_diff_computed_slam_and_gt_slam = computePoseDiffFromNumpy(slam_output, groundtruth)
+        
+        data_sorted = np.sort(pose_diff_computed_slam_and_gt_slam)
+        cdf = np.arange(1, len(data_sorted) + 1) / len(data_sorted)
+        ax.plot(data_sorted, cdf, label="SLAM source error rate")
+
+        ax.legend()
+
+        fig.savefig("res_act.png")
+
+
+
+def compute_result_from_file():
+
+    # Read the groundtruth
+    dataset = load_test_euroc()
+    groundtruth = dataset.getGroundtruth()
+    slam_output = dataset.getSlamSource()
+
+    fig_pos, ax_pos = plt.subplots()
+    fig_orient, ax_orient = plt.subplots()
+
+    for window in prediction_window:
+        actions = pd.read_csv("res_" + str(window) + ".csv").to_numpy()
+
+        pose_diff_list, angle_diff_list = computePoseDiffFromNumpy(actions[:-window], groundtruth[window:])
+
+        print("windows size:", window)
+        print(np.average(pose_diff_list), np.average(angle_diff_list))
+        
+
+        data_sorted = np.sort(pose_diff_list)
+        cdf = np.arange(1, len(data_sorted) + 1) / len(data_sorted)
+        ax_pos.plot(data_sorted, cdf, label="Phase2 error rate with window " + str(window))
+
+        data_sorted = np.sort(angle_diff_list)
+        cdf = np.arange(1, len(data_sorted) + 1) / len(data_sorted)
+        ax_orient.plot(data_sorted, cdf, label="Phase2 error rate with window " + str(window))
+
+    pose_diff_computed_slam_and_gt_slam, \
+    angle_diff_computed_slam_and_gt_slam = computePoseDiffFromNumpy(slam_output, groundtruth)
+    
+    data_sorted = np.sort(pose_diff_computed_slam_and_gt_slam)
+    cdf = np.arange(1, len(data_sorted) + 1) / len(data_sorted)
+    ax_pos.plot(data_sorted, cdf, label="SLAM source error rate")
+
+    data_sorted = np.sort(angle_diff_computed_slam_and_gt_slam)
+    cdf = np.arange(1, len(data_sorted) + 1) / len(data_sorted)
+    ax_orient.plot(data_sorted, cdf, label="SLAM source error rate")
+
+    ax_pos.legend()
+    ax_orient.legend()
+
+    fig_pos.savefig("res_act_position.png")
+    fig_orient.savefig("res_act_orient.png")
+    # Add LSTM for comparison
+    
 
 
 def eval_bc(config, ckpt_name, save_episode=True):
@@ -269,9 +428,6 @@ def eval_bc(config, ckpt_name, save_episode=True):
                 action = post_process(raw_action)
                 target_qpos = action
 
-                ### step the environment
-                ts = env.step(target_qpos)
-
                 ### for visualization
                 qpos_list.append(qpos_numpy)
                 target_qpos_list.append(target_qpos)
@@ -287,30 +443,14 @@ def eval_bc(config, ckpt_name, save_episode=True):
         episode_returns.append(episode_return)
         episode_highest_reward = np.max(rewards)
         highest_rewards.append(episode_highest_reward)
-        print(f'Rollout {rollout_id}\n{episode_return=}, {episode_highest_reward=}, {env_max_reward=}, Success: {episode_highest_reward==env_max_reward}')
-
-        if save_episode:
-            save_videos(image_list, DT, video_path=os.path.join(ckpt_dir, f'video{rollout_id}.mp4'))
-
-    success_rate = np.mean(np.array(highest_rewards) == env_max_reward)
     avg_return = np.mean(episode_returns)
-    summary_str = f'\nSuccess rate: {success_rate}\nAverage return: {avg_return}\n\n'
-    for r in range(env_max_reward+1):
-        more_or_equal_r = (np.array(highest_rewards) >= r).sum()
-        more_or_equal_r_rate = more_or_equal_r / num_rollouts
-        summary_str += f'Reward >= {r}: {more_or_equal_r}/{num_rollouts} = {more_or_equal_r_rate*100}%\n'
-
-    print(summary_str)
 
     # save success rate to txt
     result_file_name = 'result_' + ckpt_name.split('.')[0] + '.txt'
     with open(os.path.join(ckpt_dir, result_file_name), 'w') as f:
-        f.write(summary_str)
         f.write(repr(episode_returns))
         f.write('\n\n')
         f.write(repr(highest_rewards))
-
-    return success_rate, avg_return
 
 
 def forward_pass(data, policy):
@@ -413,23 +553,26 @@ def plot_history(train_history, validation_history, num_epochs, ckpt_dir, seed):
     print(f'Saved plots to {ckpt_dir}')
 
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--eval', action='store_true')
-    parser.add_argument('--onscreen_render', action='store_true')
-    parser.add_argument('--ckpt_dir', action='store', type=str, help='ckpt_dir', required=True)
-    parser.add_argument('--policy_class', action='store', type=str, help='policy_class, capitalize', required=True)
-    parser.add_argument('--task_name', action='store', type=str, help='task_name', required=True)
-    parser.add_argument('--batch_size', action='store', type=int, help='batch_size', required=True)
-    parser.add_argument('--seed', action='store', type=int, help='seed', required=True)
-    parser.add_argument('--num_epochs', action='store', type=int, help='num_epochs', required=True)
-    parser.add_argument('--lr', action='store', type=float, help='lr', required=True)
+# if __name__ == '__main__':
+#     parser = argparse.ArgumentParser()
+#     parser.add_argument('--eval', action='store_true')
+#     parser.add_argument('--onscreen_render', action='store_true')
+#     parser.add_argument('--ckpt_dir', action='store', type=str, help='ckpt_dir', required=True)
+#     parser.add_argument('--policy_class', action='store', type=str, help='policy_class, capitalize', required=True)
+#     parser.add_argument('--task_name', action='store', type=str, help='task_name', required=True)
+#     parser.add_argument('--batch_size', action='store', type=int, help='batch_size', required=True)
+#     parser.add_argument('--seed', action='store', type=int, help='seed', required=True)
+#     parser.add_argument('--num_epochs', action='store', type=int, help='num_epochs', required=True)
+#     parser.add_argument('--lr', action='store', type=float, help='lr', required=True)
 
-    # for ACT
-    parser.add_argument('--kl_weight', action='store', type=int, help='KL Weight', required=False)
-    parser.add_argument('--chunk_size', action='store', type=int, help='chunk_size', required=False)
-    parser.add_argument('--hidden_dim', action='store', type=int, help='hidden_dim', required=False)
-    parser.add_argument('--dim_feedforward', action='store', type=int, help='dim_feedforward', required=False)
-    parser.add_argument('--temporal_agg', action='store_true')
+#     # for ACT
+#     parser.add_argument('--kl_weight', action='store', type=int, help='KL Weight', required=False)
+#     parser.add_argument('--chunk_size', action='store', type=int, help='chunk_size', required=False)
+#     parser.add_argument('--hidden_dim', action='store', type=int, help='hidden_dim', required=False)
+#     parser.add_argument('--dim_feedforward', action='store', type=int, help='dim_feedforward', required=False)
+#     parser.add_argument('--temporal_agg', action='store_true')
     
-    main(vars(parser.parse_args()))
+#     main(vars(parser.parse_args()))
+
+if __name__ == '__main__':
+    compute_result_from_file()
