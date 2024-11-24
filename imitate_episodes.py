@@ -22,7 +22,7 @@ import pandas as pd
 
 import sys
 sys.path.append('/home/wuhaolu/Documents/pose_prediction/')
-from PosePrediction.Utils import * 
+from PosePrediction.utils import * 
 
 from sim_env import BOX_POSE
 
@@ -30,6 +30,8 @@ import IPython
 e = IPython.embed
 
 prediction_window = [0, 10, 18, 45, 90]
+
+
 
 def main(args):
     set_seed(1)
@@ -184,7 +186,7 @@ def eval_bc_euroc(config, ckpt_name):
     print(f'Loaded: {ckpt_path}')
 
     # get the dataset
-    dataset = load_test_euroc()
+    dataset = load_test_euroc(TEST_IDX)
 
     groundtruth = dataset.getGroundtruth()
     slam_output = dataset.getSlamSource()
@@ -209,9 +211,9 @@ def eval_bc_euroc(config, ckpt_name):
         
         action_windows = [[] for _ in range(len(prediction_window))]
 
-        batch_size = 10
+        batch_size = 20
 
-        for t in range(0, gt_length, batch_size):
+        for t in range(0, gt_length // 2, batch_size):
         # for t in range(100):
             print(t)
 
@@ -263,7 +265,7 @@ def eval_bc_euroc(config, ckpt_name):
 def compute_result_from_file():
 
     # Read the groundtruth
-    dataset = load_test_euroc()
+    dataset = load_test_euroc(TEST_IDX)
     groundtruth = dataset.getGroundtruth()
     slam_output = dataset.getSlamSource()
 
@@ -272,8 +274,12 @@ def compute_result_from_file():
 
     for window in prediction_window:
         actions = pd.read_csv("res_" + str(window) + ".csv").to_numpy()
+        print("Results: " , len(actions), len(groundtruth))
 
-        pose_diff_list, angle_diff_list = computePoseDiffFromNumpy(actions[:-window], groundtruth[window:])
+        if (window == 0):
+            pose_diff_list, angle_diff_list = computePoseDiffFromNumpy(actions, groundtruth[:len(actions)])
+        else:
+            pose_diff_list, angle_diff_list = computePoseDiffFromNumpy(actions[:-window], groundtruth[window:len(actions)])
 
         print("windows size:", window)
         print(np.average(pose_diff_list), np.average(angle_diff_list))
@@ -553,26 +559,26 @@ def plot_history(train_history, validation_history, num_epochs, ckpt_dir, seed):
     print(f'Saved plots to {ckpt_dir}')
 
 
-# if __name__ == '__main__':
-#     parser = argparse.ArgumentParser()
-#     parser.add_argument('--eval', action='store_true')
-#     parser.add_argument('--onscreen_render', action='store_true')
-#     parser.add_argument('--ckpt_dir', action='store', type=str, help='ckpt_dir', required=True)
-#     parser.add_argument('--policy_class', action='store', type=str, help='policy_class, capitalize', required=True)
-#     parser.add_argument('--task_name', action='store', type=str, help='task_name', required=True)
-#     parser.add_argument('--batch_size', action='store', type=int, help='batch_size', required=True)
-#     parser.add_argument('--seed', action='store', type=int, help='seed', required=True)
-#     parser.add_argument('--num_epochs', action='store', type=int, help='num_epochs', required=True)
-#     parser.add_argument('--lr', action='store', type=float, help='lr', required=True)
-
-#     # for ACT
-#     parser.add_argument('--kl_weight', action='store', type=int, help='KL Weight', required=False)
-#     parser.add_argument('--chunk_size', action='store', type=int, help='chunk_size', required=False)
-#     parser.add_argument('--hidden_dim', action='store', type=int, help='hidden_dim', required=False)
-#     parser.add_argument('--dim_feedforward', action='store', type=int, help='dim_feedforward', required=False)
-#     parser.add_argument('--temporal_agg', action='store_true')
-    
-#     main(vars(parser.parse_args()))
-
 if __name__ == '__main__':
+    # parser = argparse.ArgumentParser()
+    # parser.add_argument('--eval', action='store_true')
+    # parser.add_argument('--onscreen_render', action='store_true')
+    # parser.add_argument('--ckpt_dir', action='store', type=str, help='ckpt_dir', required=True)
+    # parser.add_argument('--policy_class', action='store', type=str, help='policy_class, capitalize', required=True)
+    # parser.add_argument('--task_name', action='store', type=str, help='task_name', required=True)
+    # parser.add_argument('--batch_size', action='store', type=int, help='batch_size', required=True)
+    # parser.add_argument('--seed', action='store', type=int, help='seed', required=True)
+    # parser.add_argument('--num_epochs', action='store', type=int, help='num_epochs', required=True)
+    # parser.add_argument('--lr', action='store', type=float, help='lr', required=True)
+
+    # # for ACT
+    # parser.add_argument('--kl_weight', action='store', type=int, help='KL Weight', required=False)
+    # parser.add_argument('--chunk_size', action='store', type=int, help='chunk_size', required=False)
+    # parser.add_argument('--hidden_dim', action='store', type=int, help='hidden_dim', required=False)
+    # parser.add_argument('--dim_feedforward', action='store', type=int, help='dim_feedforward', required=False)
+    # parser.add_argument('--temporal_agg', action='store_true')
+    
+    # main(vars(parser.parse_args()))
+
+# if __name__ == '__main__':
     compute_result_from_file()

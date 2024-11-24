@@ -6,7 +6,8 @@ from torch.utils.data import TensorDataset, DataLoader
 
 import sys
 sys.path.append('/home/wuhaolu/Documents/pose_prediction/')
-from PosePrediction.Utils import * 
+from utils import * 
+from PosePrediction.utils import *
 
 import pandas as pd
 import cv2
@@ -130,7 +131,12 @@ class EuroCStyleDataset(torch.utils.data.Dataset):
         # Get only the poses  
         slam_pose = observation_raw[:, 1:8]
         phase1_pose = observation_raw[:, 9:16]
-        observation = np.hstack([slam_pose, phase1_pose])
+
+        phase0_phase1_interval = observation_raw[:, 16]
+        phase1_phase2_interval = observation_raw[: 17]
+
+        # observation = np.hstack([slam_pose, phase1_pose])
+        observation = np.hstack([slam_pose, phase0_phase1_interval])
 
         groundtruth_raw = pd.read_csv(groundtruth_path).to_numpy()
         groundtruth = groundtruth_raw[:, 1:]
@@ -327,6 +333,9 @@ def load_data_euroc(num_episodes, batch_size_train, batch_size_val):
     train_indices = shuffled_indices[:int(train_ratio * num_episodes)]
     val_indices = shuffled_indices[int(train_ratio * num_episodes):]
 
+    print(train_indices)
+    print(val_indices)
+
     train_dataset = EuroCStyleDataset(train_indices, episodeid2qposefile, episodeid2gtfile, episodeid2imagepath)
     val_dataset = EuroCStyleDataset(val_indices, episodeid2qposefile, episodeid2gtfile, episodeid2imagepath)
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size_train, shuffle=True, pin_memory=True, num_workers=1, prefetch_factor=1)
@@ -334,10 +343,9 @@ def load_data_euroc(num_episodes, batch_size_train, batch_size_val):
 
     return train_dataloader, val_dataloader, None, train_dataset.is_sim
 
-def load_test_euroc() -> EuroCStyleDataset:
+def load_test_euroc(i) -> EuroCStyleDataset:
 
     # Hardcoded as using the last one for doing the prediction
-    i = len(MSD_LIST) - 1
     episodeid2qposefile = {}
     episodeid2gtfile = {}
     episodeid2imagepath = {}
