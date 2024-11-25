@@ -132,11 +132,10 @@ class EuroCStyleDataset(torch.utils.data.Dataset):
         slam_pose = observation_raw[:, 1:8]
         phase1_pose = observation_raw[:, 9:16]
 
-        phase0_phase1_interval = observation_raw[:, 16]
-        phase1_phase2_interval = observation_raw[: 17]
+        phase0_phase1_interval = observation_raw[:, 16:17]
 
         # observation = np.hstack([slam_pose, phase1_pose])
-        observation = np.hstack([slam_pose, phase0_phase1_interval])
+        observation = np.hstack([slam_pose, phase0_phase1_interval, phase1_pose])
 
         groundtruth_raw = pd.read_csv(groundtruth_path).to_numpy()
         groundtruth = groundtruth_raw[:, 1:]
