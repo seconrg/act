@@ -2,6 +2,7 @@ import numpy as np
 import torch
 import os
 import h5py
+import torch.utils
 from torch.utils.data import TensorDataset, DataLoader
 
 import sys
@@ -134,8 +135,8 @@ class EuroCStyleDataset(torch.utils.data.Dataset):
 
         phase0_phase1_interval = observation_raw[:, 16:17]
 
-        # observation = np.hstack([slam_pose, phase1_pose])
-        observation = np.hstack([slam_pose, phase0_phase1_interval, phase1_pose])
+        observation = np.hstack([slam_pose, phase1_pose])
+        # observation = np.hstack([slam_pose, phase0_phase1_interval, phase1_pose])
 
         groundtruth_raw = pd.read_csv(groundtruth_path).to_numpy()
         groundtruth = groundtruth_raw[:, 1:]
@@ -190,7 +191,6 @@ class EuroCStyleDataset(torch.utils.data.Dataset):
         # print(is_pad.shape)
         # print("")
         return image_data, qpos_data, action_data, is_pad
-        # return image_data[:10000], qpos_data[:10000], action_data[:10000], is_pad[:10000]
 
     def getImagePoseAt(self, index, batch_size):
 
@@ -213,9 +213,9 @@ class EuroCStyleDataset(torch.utils.data.Dataset):
         res_qpos = []
 
         for i in range(index, min(index + batch_size, len(observation))):
-            qpos = np.asarray(observation[index])
-            left_image = np.asarray(cv2.imread(camera_path[index][1]))
-            right_image = np.asarray(cv2.imread(camera_path[index][3]))
+            qpos = np.asarray(observation[i])
+            left_image = np.asarray(cv2.imread(camera_path[i][1]))
+            right_image = np.asarray(cv2.imread(camera_path[i][3]))
 
             # Load the image from information
             all_cam_images = [left_image, right_image]
@@ -244,13 +244,120 @@ class EuroCStyleDataset(torch.utils.data.Dataset):
 
         groundtruth_path = self.id2gtpath[episode_id]
         groundtruth_raw = pd.read_csv(groundtruth_path).to_numpy()
-        groundtruth = groundtruth_raw[:, 1:]
+        groundtruth = groundtruth_raw[:, 1:8]
         return groundtruth
     
 
     def getSlamSource(self):
 
         episode_id = len(MSD_LIST)-1
+
+        observation_path = self.id2datasetpath[episode_id]
+        observation_raw = pd.read_csv(observation_path).to_numpy()
+        # Get only the poses  
+        slam_pose = observation_raw[:, 1:8]
+
+        return slam_pose
+
+
+class EuroCStyleDatasetForSimpleTransformer(torch.utils.data.Dataset):
+
+    def __init__(self, episode_ids, id2datasetpath, id2gtpath, id2camera_paths, ):
+
+        super(EpisodicDataset).__init__()
+        self.episode_ids = episode_ids
+        self.id2datasetpath = id2datasetpath
+        self.id2gtpath = id2gtpath
+        self.id2camerapaths = id2camera_paths
+        self.is_sim = None
+        self.qpos_len = 30
+
+        self.episode_id = TEST_IDX
+    
+    def __len__(self):
+        return len(self.episode_ids)
+    
+    def __getitem__(self, index):
+
+        sample_full_episode = False # hardcode
+
+        episode_id = self.episode_ids[index]
+
+        # Load the data from prediction
+        observation_path = self.id2datasetpath[episode_id]
+        groundtruth_path = self.id2gtpath[episode_id]
+        camera_path = self.id2camerapaths[episode_id]
+
+        observation_raw = pd.read_csv(observation_path).to_numpy()
+        slam_pose = observation_raw[:, 1:8]
+        phase1_pose = observation_raw[:, 9:16]
+        # Create padding f
+        
+        observation = np.hstack([slam_pose, phase1_pose])
+
+        episode_len = observation.shape[0]
+        if sample_full_episode:
+            start_ts = 0
+        else:
+            start_ts = np.random.randint(self.qpos_len, episode_len)
+        
+        action_len = episode_len - start_ts 
+
+        qpos = observation[start_ts +1 - self.qpos_len :start_ts+1]
+        qpos = np.reshape(qpos, -1)
+        
+        groundtruth_raw = pd.read_csv(groundtruth_path).to_numpy()
+        groundtruth = groundtruth_raw[:, 1:]
+        action = groundtruth[start_ts:]
+
+        original_action_shape = groundtruth.shape
+        padded_action = np.zeros(original_action_shape, dtype=np.float32)
+        padded_action[:action_len] = action
+        is_pad = np.zeros(episode_len)
+        is_pad[action_len:] = 1
+
+        qpos_data = torch.from_numpy(qpos).float()
+        action_data = torch.from_numpy(padded_action).float()
+        is_pad = torch.from_numpy(is_pad).bool()
+
+        return qpos_data, action_data, is_pad
+
+    def getPoseAt(self, index, batch_size):
+
+        episode_id = self.episode_id
+        
+        observation_path = self.id2datasetpath[episode_id]
+        observation_raw = pd.read_csv(observation_path).to_numpy()
+        slam_pose = observation_raw[:, 1:8]
+        phase1_pose = observation_raw[:, 9:16]
+        observation = np.hstack([slam_pose, phase1_pose])
+
+        res_qpos = []
+
+        for i in range(index, min(index + batch_size, len(observation))):
+            qpos = np.asarray(observation[i + 1 - self.qpos_len:i+1])
+            print("qpos:", qpos)
+            qpos = np.reshape(qpos, -1)
+            qpos_data = torch.from_numpy(qpos).float().cuda()
+            res_qpos.append(qpos_data)
+        
+        res_qpos = torch.stack(res_qpos)
+
+        return res_qpos
+    
+
+    def getGroundtruth(self):
+        
+        episode_id = self.episode_id
+
+        groundtruth_path = self.id2gtpath[episode_id]
+        groundtruth_raw = pd.read_csv(groundtruth_path).to_numpy()
+        groundtruth = groundtruth_raw[:, 1:8]
+        return groundtruth
+    
+    def getSlamSource(self):
+
+        episode_id = self.episode_id
 
         observation_path = self.id2datasetpath[episode_id]
         observation_raw = pd.read_csv(observation_path).to_numpy()
@@ -316,6 +423,16 @@ def load_data_euroc(num_episodes, batch_size_train, batch_size_val):
     train_ratio = 0.9
 
     shuffled_indices = np.random.permutation(num_episodes)
+    
+    file_list = []
+    with open(PROFILE_RESULT_MOTHER_FOLDER + PROFILE_RESULT_FILE_LIST, 'r') as fd:
+        line = fd.readline()
+        line = fd.readline()
+        while line:
+            file_list.append(line.strip())
+            line = fd.readline()
+    print(file_list)
+    print(len(file_list))
 
     print("shuffled indices: ",shuffled_indices)
 
@@ -324,10 +441,10 @@ def load_data_euroc(num_episodes, batch_size_train, batch_size_val):
     episodeid2gtfile = {}
     episodeid2imagepath = {}
 
-    for i in range(len(MSD_LIST)):
-        episodeid2qposefile[i] = PROFILE_RESULT_MOTHER_FOLDER + MSD_LIST[i] + ALIGNED_POSE_SUFFIX
-        episodeid2gtfile[i] = PROFILE_RESULT_MOTHER_FOLDER + MSD_LIST[i] + GROUNDTRUTH_SUFFIX
-        episodeid2imagepath[i] = PROFILE_RESULT_MOTHER_FOLDER + MSD_LIST[i] + IMAGE_PATH_SUFFIX
+    for i in range(len(file_list)):
+        episodeid2qposefile[i] = PROFILE_RESULT_MOTHER_FOLDER + file_list[i] + ALIGNED_POSE_SUFFIX
+        episodeid2gtfile[i] = PROFILE_RESULT_MOTHER_FOLDER + file_list[i] + GROUNDTRUTH_SUFFIX
+        episodeid2imagepath[i] = PROFILE_RESULT_MOTHER_FOLDER + file_list[i] + IMAGE_PATH_SUFFIX
     
     train_indices = shuffled_indices[:int(train_ratio * num_episodes)]
     val_indices = shuffled_indices[int(train_ratio * num_episodes):]
@@ -335,14 +452,14 @@ def load_data_euroc(num_episodes, batch_size_train, batch_size_val):
     print(train_indices)
     print(val_indices)
 
-    train_dataset = EuroCStyleDataset(train_indices, episodeid2qposefile, episodeid2gtfile, episodeid2imagepath)
-    val_dataset = EuroCStyleDataset(val_indices, episodeid2qposefile, episodeid2gtfile, episodeid2imagepath)
+    train_dataset = EuroCStyleDatasetForSimpleTransformer(train_indices, episodeid2qposefile, episodeid2gtfile, episodeid2imagepath)
+    val_dataset = EuroCStyleDatasetForSimpleTransformer(val_indices, episodeid2qposefile, episodeid2gtfile, episodeid2imagepath)
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size_train, shuffle=True, pin_memory=True, num_workers=1, prefetch_factor=1)
     val_dataloader = DataLoader(val_dataset, batch_size=batch_size_val, shuffle=True, pin_memory=True, num_workers=1, prefetch_factor=1)
 
     return train_dataloader, val_dataloader, None, train_dataset.is_sim
 
-def load_test_euroc(i) -> EuroCStyleDataset:
+def load_test_euroc(i) -> EuroCStyleDatasetForSimpleTransformer:
 
     # Hardcoded as using the last one for doing the prediction
     episodeid2qposefile = {}
@@ -353,12 +470,9 @@ def load_test_euroc(i) -> EuroCStyleDataset:
     episodeid2gtfile[i] = PROFILE_RESULT_MOTHER_FOLDER + MSD_LIST[i] + GROUNDTRUTH_SUFFIX
     episodeid2imagepath[i] = PROFILE_RESULT_MOTHER_FOLDER + MSD_LIST[i] + IMAGE_PATH_SUFFIX
     
-    val_dataset = EuroCStyleDataset([i], episodeid2qposefile, episodeid2gtfile, episodeid2imagepath)
+    val_dataset = EuroCStyleDatasetForSimpleTransformer([i], episodeid2qposefile, episodeid2gtfile, episodeid2imagepath)
 
     return val_dataset
-
-
-
     
 
 

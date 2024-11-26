@@ -7,6 +7,7 @@ from torch import nn
 from torch.autograd import Variable
 from .backbone import build_backbone
 from .transformer import build_transformer, TransformerEncoder, TransformerEncoderLayer
+from .simple_transformer import *
 
 import numpy as np
 
@@ -76,13 +77,13 @@ class DETRVAE(nn.Module):
         self.encoder_joint_proj_phase1 = nn.Linear(7, hidden_dim)
 
         self.latent_proj = nn.Linear(hidden_dim, self.latent_dim*2) # project hidden state to latent std, var
-        # self.register_buffer('pos_table', get_sinusoid_encoding_table(1+2+num_queries, hidden_dim)) # [CLS], qpos, a_seq
-        self.register_buffer('pos_table', get_sinusoid_encoding_table(1+1+num_queries, hidden_dim)) # [CLS], qpos, a_seq
+        self.register_buffer('pos_table', get_sinusoid_encoding_table(1+2+num_queries, hidden_dim)) # [CLS], qpos, a_seq
+        # self.register_buffer('pos_table', get_sinusoid_encoding_table(1+1+num_queries, hidden_dim)) # [CLS], qpos, a_seq
 
         # decoder extra parameters
         self.latent_out_proj = nn.Linear(self.latent_dim, hidden_dim) # project latent sample to embedding
-        # self.additional_pos_embed = nn.Embedding(3, hidden_dim) # learned position embedding for proprio and latent
-        self.additional_pose_embed = nn.Embedding(2, hidden_dim) # learned position embedding for proprio and latent
+        self.additional_pos_embed = nn.Embedding(3, hidden_dim) # learned position embedding for proprio and latent
+        # self.additional_pose_embed = nn.Embedding(2, hidden_dim) # learned position embedding for proprio and latent
 
     def forward(self, qpos, image, env_state, actions=None, is_pad=None):
         """
@@ -107,12 +108,12 @@ class DETRVAE(nn.Module):
             # qpos_embed = torch.unsqueeze(qpos_embed, axis=1)  # (bs, 1, hidden_dim)
             cls_embed = self.cls_embed.weight # (1, hidden_dim)
             cls_embed = torch.unsqueeze(cls_embed, axis=0).repeat(bs, 1, 1) # (bs, 1, hidden_dim)
-            # encoder_input = torch.cat([cls_embed, slam_embed, phase1_embed, action_embed], axis=1) # (bs, seq+1, hidden_dim)
-            encoder_input = torch.cat([cls_embed, slam_embed, action_embed], axis=1) # (bs, seq+1, hidden_dim)
+            encoder_input = torch.cat([cls_embed, slam_embed, phase1_embed, action_embed], axis=1) # (bs, seq+1, hidden_dim)
+            # encoder_input = torch.cat([cls_embed, slam_embed, action_embed], axis=1) # (bs, seq+1, hidden_dim)
             encoder_input = encoder_input.permute(1, 0, 2) # (seq+1, bs, hidden_dim)
             # do not mask cls token
-            # cls_joint_is_pad = torch.full((bs, 3), False).to(qpos.device) # False: not a padding
-            cls_joint_is_pad = torch.full((bs, 2), False).to(qpos.device) # False: not a padding
+            cls_joint_is_pad = torch.full((bs, 3), False).to(qpos.device) # False: not a padding
+            # cls_joint_is_pad = torch.full((bs, 2), False).to(qpos.device) # False: not a padding
             is_pad = torch.cat([cls_joint_is_pad, is_pad], axis=1)  # (bs, seq+1)
             # obtain position embedding
             pos_embed = self.pos_table.clone().detach()
@@ -155,10 +156,10 @@ class DETRVAE(nn.Module):
 
             slam = self.input_proj_slam(qpos[:, 0:7])
             phase1 = self.input_proj_phase1(qpos[:, 7:14])
-
+            
             env_state = self.input_proj_env_state(env_state)
-            # transformer_input = torch.cat([slam, phase1, env_state], axis=1) # seq length = 2
-            transformer_input = torch.cat([slam, env_state], axis=1) # seq length = 2
+            transformer_input = torch.cat([slam, phase1, env_state], axis=1) # seq length = 2
+            # transformer_input = torch.cat([slam, env_state], axis=1) # seq length = 2
             hs = self.transformer(transformer_input, None, self.query_embed.weight, self.pos.weight)[0]
         a_hat = self.action_head(hs)
         is_pad_hat = self.is_pad_head(hs)
@@ -253,7 +254,7 @@ def build_encoder(args):
 
 
 def build(args):
-    state_dim = 7 # TODO hardcode
+    state_dim = 7 #TODO hardcode
 
     # From state
     # backbone = None # from state for now, no need for conv nets
@@ -281,7 +282,7 @@ def build(args):
     return model
 
 def build_cnnmlp(args):
-    state_dim = 7 # TODO hardcode
+    state_dim = 7 #TODO hardcode
 
     # From state
     # backbone = None # from state for now, no need for conv nets
@@ -302,3 +303,14 @@ def build_cnnmlp(args):
 
     return model
 
+def build_simple_transformer(args):
+    state_dim = 7 #TODO hardcode
+
+    transformer = build_transformer(args)
+    encoder = build_encoder(args)
+
+    model = SimpleTransformer(transformer, 
+                              encoder, 
+                              state_dim = state_dim, 
+                              num_queries = args.num_queries)
+    return model

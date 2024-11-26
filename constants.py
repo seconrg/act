@@ -32,8 +32,8 @@ SIM_TASK_CONFIGS = {
     },
     'sim_vr_pose': {
         'dataset_dir': './',
-        'num_episodes': 13, 
-        'episode_len': 400,
+        'num_episodes': 312, 
+        'episode_len': 1000,
         'camera_names': ['left', 'right']
     }
 }

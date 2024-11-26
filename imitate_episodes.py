@@ -13,7 +13,7 @@ from constants import PUPPET_GRIPPER_JOINT_OPEN
 from utils import load_data, load_data_euroc, load_test_euroc # data functions
 from utils import sample_box_pose, sample_insertion_pose # robot functions
 from utils import compute_dict_mean, set_seed, detach_dict # helper functions
-from policy import ACTPolicy, CNNMLPPolicy
+from policy import ACTPolicy, CNNMLPPolicy, SimplePolicy
 from visualize_episodes import save_videos
 
 import csv
@@ -81,6 +81,23 @@ def main(args):
     elif policy_class == 'CNNMLP':
         policy_config = {'lr': args['lr'], 'lr_backbone': lr_backbone, 'backbone' : backbone, 'num_queries': 1,
                          'camera_names': camera_names,}
+    elif policy_class == 'SIMPLE':
+        enc_layers = 4
+        dec_layers = 7
+        nheads = 8
+        policy_config = {'lr': args['lr'],
+                         'num_queries': args['chunk_size'],
+                         'kl_weight': args['kl_weight'],
+                         'hidden_dim': args['hidden_dim'],
+                         'dim_feedforward': args['dim_feedforward'],
+                         'lr_backbone': lr_backbone,
+                         'backbone': backbone,
+                         'enc_layers': enc_layers,
+                         'dec_layers': dec_layers,
+                         'nheads': nheads,
+                         'camera_names': camera_names,
+                         }
+
     else:
         raise NotImplementedError
 
@@ -137,6 +154,8 @@ def make_policy(policy_class, policy_config):
         policy = ACTPolicy(policy_config)
     elif policy_class == 'CNNMLP':
         policy = CNNMLPPolicy(policy_config)
+    elif policy_class == 'SIMPLE':
+        policy = SimplePolicy(policy_config)
     else:
         raise NotImplementedError
     return policy
@@ -146,6 +165,8 @@ def make_optimizer(policy_class, policy):
     if policy_class == 'ACT':
         optimizer = policy.configure_optimizers()
     elif policy_class == 'CNNMLP':
+        optimizer = policy.configure_optimizers()
+    elif policy_class == 'SIMPLE':
         optimizer = policy.configure_optimizers()
     else:
         raise NotImplementedError
@@ -193,13 +214,8 @@ def eval_bc_euroc(config, ckpt_name):
 
     gt_length = len(groundtruth)
 
-    query_frequency = policy_config['num_queries']
-    if temporal_agg:
-        query_frequency = 1
-        num_queries = policy_config['num_queries']
+    num_queries = policy_config['num_queries']
 
-    if temporal_agg:
-        all_time_actions = torch.zeros([max_timesteps, max_timesteps+num_queries, state_dim]).cuda()
 
     with torch.inference_mode():
         
@@ -213,17 +229,26 @@ def eval_bc_euroc(config, ckpt_name):
 
         batch_size = 20
 
-        for t in range(0, gt_length // 2, batch_size):
-        # for t in range(100):
+        for t in range(30, gt_length // 2, batch_size):
+        # for t in range(10030, 10100, batch_size):
             print(t)
 
-            image, qpos = dataset.getImagePoseAt(t, batch_size)
-            print(image.shape)
+            # image, qpos = dataset.getImagePoseAt(t, batch_size)
             
-            time_begin = time.time_ns()
-            all_actions = policy(qpos, image)
-            time_end = time.time_ns()
-            print("Inference time:", (time_end - time_begin) / 1000000, " ms")
+            # # time_begin = time.time_ns()
+            # all_actions = policy(qpos, image)
+
+            qpos = dataset.getPoseAt(t, batch_size)
+            
+            all_actions = policy(qpos)
+            print(qpos.shape, all_actions.shape)
+            print("--------")
+            print(groundtruth[t])
+
+            # for action in all_actions:
+            #     print(action)
+            # time_end = time.time_ns()
+            # print("Inference time:", (time_end - time_begin) / 1000000, " ms")
             
             # We aim at the target of different prediction window
             for i, window in enumerate(prediction_window):
@@ -236,8 +261,12 @@ def eval_bc_euroc(config, ckpt_name):
         for window, action_window in zip(prediction_window, action_windows):
             with open("res_" + str(window) + ".csv", "w") as res:
                 res.write("x, y, z, w, x, y, z\n")
+                # res.write("x, y, z, yaw, pitch, row")
                 csv_writer = csv.writer(res)
-                csv_writer.writerows(action_window)
+                try:
+                    csv_writer.writerows(action_window)
+                except:
+                    print("window error:", action_window)
 
         # Compute the pose error rate
         for i, window in enumerate(prediction_window):
@@ -274,7 +303,7 @@ def compute_result_from_file():
 
     for window in prediction_window:
         actions = pd.read_csv("res_" + str(window) + ".csv").to_numpy()
-        print("Results: " , len(actions), len(groundtruth))
+        print(len(actions))
 
         if (window == 0):
             pose_diff_list, angle_diff_list = computePoseDiffFromNumpy(actions, groundtruth[:len(actions)])
@@ -310,7 +339,70 @@ def compute_result_from_file():
     fig_pos.savefig("res_act_position.png")
     fig_orient.savefig("res_act_orient.png")
     # Add LSTM for comparison
+
+
+def compute_result_from_euler_file():
+    # Read the groundtruth
+    dataset = load_test_euroc(TEST_IDX)
+    groundtruth = dataset.getGroundtruth()
+    slam_output = dataset.getSlamSource()
+
+    fig_pos, ax_pos = plt.subplots()
+    fig_orient, ax_orient = plt.subplots(3)
+
+
+    for window in prediction_window:
+        actions = pd.read_csv("res_" + str(window) + ".csv").to_numpy()
+        print(len(actions))
+
+        if (window == 0):
+            actions = actions
+            groundtruth = groundtruth[:len(actions)]
+        else:
+            actions = actions[:-window]
+            groundtruth = groundtruth[window:len(actions)]
+
+        pose_diff_list = [np.linalg.norm(action[:3] - groundtruth[:3]) for action, groundtruth in zip(actions, groundtruth)]
+        yaw_list = np.abs(actions[: 3] - groundtruth[: 3])
+        pitch_list = np.abs(actions[: 4] - groundtruth[: 4])
+        roll_list = np.abs(actions[: 5] - groundtruth[: 5])
+
+        print("windows size:", window)
+        print(np.average(pose_diff_list), np.average(yaw_list), np.average(pitch_list), np.average(roll_list))
+        
+
+        data_sorted = np.sort(pose_diff_list)
+        cdf = np.arange(1, len(data_sorted) + 1) / len(data_sorted)
+        ax_pos.plot(data_sorted, cdf, label="Phase2 error rate with window " + str(window))
+
+        data_sorted = np.sort(yaw_list)
+        cdf = np.arange(1, len(data_sorted) + 1) / len(data_sorted)
+        ax_orient[0].plot(data_sorted, cdf, label="Yaw error rate with window " + str(window))
+
+        data_sorted = np.sort(pitch_list)
+        cdf = np.arange(1, len(data_sorted) + 1) / len(data_sorted)
+        ax_orient[1].plot(data_sorted, cdf, label="Pitch error rate with window " + str(window))
+
+        data_sorted = np.sort(roll_list)
+        cdf = np.arange(1, len(data_sorted) + 1) / len(data_sorted)
+        ax_orient[2].plot(data_sorted, cdf, label="Roll error rate with window " + str(window))
+
+    pose_diff_computed_slam_and_gt_slam, \
+    angle_diff_computed_slam_and_gt_slam = computePoseDiffFromNumpy(slam_output, groundtruth)
     
+    data_sorted = np.sort(pose_diff_computed_slam_and_gt_slam)
+    cdf = np.arange(1, len(data_sorted) + 1) / len(data_sorted)
+    ax_pos.plot(data_sorted, cdf, label="SLAM source error rate")
+
+    # data_sorted = np.sort(angle_diff_computed_slam_and_gt_slam)
+    # cdf = np.arange(1, len(data_sorted) + 1) / len(data_sorted)
+    # ax_orient.plot(data_sorted, cdf, label="SLAM source error rate")
+
+    ax_pos.legend()
+    ax_orient.legend()
+
+    fig_pos.savefig("res_act_position.png")
+    fig_orient.savefig("res_act_orient.png")
 
 
 def eval_bc(config, ckpt_name, save_episode=True):
@@ -459,10 +551,15 @@ def eval_bc(config, ckpt_name, save_episode=True):
         f.write(repr(highest_rewards))
 
 
+# def forward_pass(data, policy):
+#     image_data, qpos_data, action_data, is_pad = data
+#     image_data, qpos_data, action_data, is_pad = image_data.cuda(), qpos_data.cuda(), action_data.cuda(), is_pad.cuda()
+#     return policy(qpos_data, image_data, action_data, is_pad) # TODO remove None
+
 def forward_pass(data, policy):
-    image_data, qpos_data, action_data, is_pad = data
-    image_data, qpos_data, action_data, is_pad = image_data.cuda(), qpos_data.cuda(), action_data.cuda(), is_pad.cuda()
-    return policy(qpos_data, image_data, action_data, is_pad) # TODO remove None
+    qpos_data, action_data, is_pad = data
+    qpos_data, action_data, is_pad = qpos_data.cuda(), action_data.cuda(), is_pad.cuda()
+    return policy(qpos_data, action_data, is_pad)
 
 
 def train_bc(train_dataloader, val_dataloader, config):
@@ -508,6 +605,7 @@ def train_bc(train_dataloader, val_dataloader, config):
         policy.train()
         optimizer.zero_grad()
         for batch_idx, data in enumerate(train_dataloader):
+            # print("batch_idx, ", batch_idx)
             forward_dict = forward_pass(data, policy)
             # backward
             loss = forward_dict['loss']
@@ -517,6 +615,7 @@ def train_bc(train_dataloader, val_dataloader, config):
             train_history.append(detach_dict(forward_dict))
         epoch_summary = compute_dict_mean(train_history[(batch_idx+1)*epoch:(batch_idx+1)*(epoch+1)])
         epoch_train_loss = epoch_summary['loss']
+        print("")
         print(f'Train loss: {epoch_train_loss:.5f}')
         summary_string = ''
         for k, v in epoch_summary.items():

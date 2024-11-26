@@ -141,6 +141,6 @@ dmypy.json
 
 #
 *.ckpt 
-model*
+# model*
 *.csv
 *.png
