@@ -13,6 +13,10 @@ import numpy as np
 import IPython
 e = IPython.embed
 
+import sys
+sys.path.append('/home/wuhaolu/Documents/pose_prediction/')
+from act.utils import INPUT_DIM
+
 
 def reparametrize(mu, logvar):
     std = logvar.div(2).exp()
@@ -46,24 +50,18 @@ class SimpleTransformer(nn.Module):
         self.query_embed = nn.Embedding(num_queries, hidden_dim)
         
         history_state = 30
-        self.input_proj_robot_state = nn.Linear(14 * history_state, hidden_dim)
-        self.input_proj_slam = nn.Linear(7, hidden_dim)
-        self.input_proj_phase1 = nn.Linear(7, hidden_dim)
-        self.input_proj_env_state = nn.Linear(7, hidden_dim)
+        self.input_proj_robot_state = nn.Linear(INPUT_DIM * 2 * history_state, hidden_dim)
+        self.input_proj_slam = nn.Linear(INPUT_DIM, hidden_dim)
+        self.input_proj_phase1 = nn.Linear(INPUT_DIM, hidden_dim)
+        self.input_proj_env_state = nn.Linear(INPUT_DIM, hidden_dim)
         self.pos = torch.nn.Embedding(1, hidden_dim)
         self.backbones = None
-
-        
-        # self.input_proj_position_state = nn.Linear(12 * history_state, hidden_dim)
-        # self.input_proj_env_state = nn.Linear(7, hidden_dim)
-        # self.pos = torch.nn.Embedding(2, hidden_dim)
-        # self.backbones = None
         
         # encoder extra params
         self.latent_dim = 32
         self.cls_embed = nn.Embedding(1, hidden_dim)
-        self.encoder_action_proj = nn.Linear(7, hidden_dim) # project action to embedding
-        self.encoder_joint_proj = nn.Linear(14 * history_state, hidden_dim)  # project qpos to embedding
+        self.encoder_action_proj = nn.Linear(INPUT_DIM, hidden_dim) # project action to embedding
+        self.encoder_joint_proj = nn.Linear(INPUT_DIM * 2 * history_state, hidden_dim)  # project qpos to embedding
         self.latent_proj = nn.Linear(hidden_dim, self.latent_dim*2) # project hidden state to latent std, var
         self.register_buffer('pos_table', get_sinusoid_encoding_table(1+1+num_queries, hidden_dim)) # [CLS], qpos, a_seq
 
@@ -90,8 +88,8 @@ class SimpleTransformer(nn.Module):
             encoder_input = torch.cat([cls_embed, qpos_embed, action_embed], axis=1) # (bs, seq+1, hidden_dim)
 
             encoder_input = encoder_input.permute(1, 0, 2) # (seq+1, bs, hidden_dim)
+            
             # do not mask cls token
-            # cls_joint_is_pad = torch.full((bs, 3), False).to(qpos.device) # False: not a padding
             cls_joint_is_pad = torch.full((bs, 2), False).to(qpos.device) # False: not a padding
             is_pad = torch.cat([cls_joint_is_pad, is_pad], axis=1)  # (bs, seq+1)
             # obtain position embedding

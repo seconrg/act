@@ -12,35 +12,6 @@ import IPython
 e = IPython.embed
 
 
-# class CustomLoss(nn.Module):
-#     def __init__(self):
-#         super(CustomLoss, self).__init__()
-
-#     def forward(self, y_pred, y_true):
-#         # Example: Combine L1 Loss and L2 Loss
-#         def compute_pose_diff(y_pred, y_true):
-#             print(y_pred, y_true)
-#             position1 = torch(y_pred[0], y_pred[1], y_pred[2])
-#             position2 = torch(y_true[0], y_true[1], y_true[2])
-
-#             orientation1 = (y_pred[3], y_pred[4], y_pred[5], y_pred[6])
-#             orientation2 = (y_true[3], y_true[4], y_true[5], y_true[6])
-#             elucid_diff = torch.norm(position1 - position2)
-        
-
-#             rotation1 = Rotation.from_quat(orientation1)
-#             rotation2 = Rotation.from_quat(orientation2)
-
-#             rotated1 = rotation1.apply((0,0, 1))
-#             rotated2 = rotation2.apply((0,0, 1))
-
-#             angle_diff = np.arccos(np.dot(rotated1,rotated2) / 
-#                                 (np.dot(rotated1, rotated1) * 
-#                                     np.dot(rotated2, rotated2)))
-            
-#             return elucid_diff, angle_diff
-        
-#         return elucid_diff + angle_diff * 0.5
 
 class ACTPolicy(nn.Module):
     def __init__(self, args_override):
@@ -168,11 +139,7 @@ class SimplePolicy(nn.Module):
 
             return loss_dict
         else: # inference time
-            for i in range(0, len(qpos), 7):
-                print(qpos[i:i+7])
-            print("|||||||")
             a_hat, _, (_, _) = self.model(qpos) # no action, sample from prior
-            print("a_hat inference:", a_hat)
             return a_hat
     
     def configure_optimizers(self):

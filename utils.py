@@ -16,6 +16,8 @@ import cv2
 import IPython
 e = IPython.embed
 
+INPUT_DIM = 7
+
 class EpisodicDataset(torch.utils.data.Dataset):
     def __init__(self, episode_ids, dataset_dir, camera_names, norm_stats):
         super(EpisodicDataset).__init__()
@@ -130,10 +132,10 @@ class EuroCStyleDataset(torch.utils.data.Dataset):
 
         observation_raw = pd.read_csv(observation_path).to_numpy()
         # Get only the poses  
-        slam_pose = observation_raw[:, 1:8]
-        phase1_pose = observation_raw[:, 9:16]
+        slam_pose = observation_raw[:, 1:INPUT_DIM+1]
+        phase1_pose = observation_raw[:, INPUT_DIM+2:INPUT_DIM*2+2]
 
-        phase0_phase1_interval = observation_raw[:, 16:17]
+        # phase0_phase1_interval = observation_raw[:, 16:17]
 
         observation = np.hstack([slam_pose, phase1_pose])
         # observation = np.hstack([slam_pose, phase0_phase1_interval, phase1_pose])
@@ -184,12 +186,6 @@ class EuroCStyleDataset(torch.utils.data.Dataset):
         # channel last
         image_data = torch.einsum('k h w c -> k c h w', image_data)
 
-        # TODO: Check whether we need to do normalization here
-        # print(image_data.shape)
-        # print(qpos_data.shape)
-        # print(action_data.shape)
-        # print(is_pad.shape)
-        # print("")
         return image_data, qpos_data, action_data, is_pad
 
     def getImagePoseAt(self, index, batch_size):
@@ -201,8 +197,8 @@ class EuroCStyleDataset(torch.utils.data.Dataset):
 
         observation_raw = pd.read_csv(observation_path).to_numpy()
         # Get only the poses  
-        slam_pose = observation_raw[:, 1:8]
-        phase1_pose = observation_raw[:, 9:16]
+        slam_pose = observation_raw[:, 1:INPUT_DIM+1]
+        phase1_pose = observation_raw[:, INPUT_DIM+2:INPUT_DIM*2+2]
         observation = np.hstack([slam_pose, phase1_pose])
         
         camera_path = pd.read_csv(camera_path).to_numpy()
@@ -235,7 +231,6 @@ class EuroCStyleDataset(torch.utils.data.Dataset):
         res_image = torch.stack(res_image)
         res_qpos = torch.stack(res_qpos)
 
-        # return image_data, qpos_data
         return res_image, res_qpos
     
     def getGroundtruth(self):
@@ -244,7 +239,7 @@ class EuroCStyleDataset(torch.utils.data.Dataset):
 
         groundtruth_path = self.id2gtpath[episode_id]
         groundtruth_raw = pd.read_csv(groundtruth_path).to_numpy()
-        groundtruth = groundtruth_raw[:, 1:8]
+        groundtruth = groundtruth_raw[:, 1:INPUT_DIM+1]
         return groundtruth
     
 
@@ -255,7 +250,7 @@ class EuroCStyleDataset(torch.utils.data.Dataset):
         observation_path = self.id2datasetpath[episode_id]
         observation_raw = pd.read_csv(observation_path).to_numpy()
         # Get only the poses  
-        slam_pose = observation_raw[:, 1:8]
+        slam_pose = observation_raw[:, 1:INPUT_DIM+1]
 
         return slam_pose
 
@@ -289,8 +284,8 @@ class EuroCStyleDatasetForSimpleTransformer(torch.utils.data.Dataset):
         camera_path = self.id2camerapaths[episode_id]
 
         observation_raw = pd.read_csv(observation_path).to_numpy()
-        slam_pose = observation_raw[:, 1:8]
-        phase1_pose = observation_raw[:, 9:16]
+        slam_pose = observation_raw[:, 1:INPUT_DIM +1]
+        phase1_pose = observation_raw[:, INPUT_DIM+2:INPUT_DIM*2 + 2]
         # Create padding f
         
         observation = np.hstack([slam_pose, phase1_pose])
@@ -328,8 +323,8 @@ class EuroCStyleDatasetForSimpleTransformer(torch.utils.data.Dataset):
         
         observation_path = self.id2datasetpath[episode_id]
         observation_raw = pd.read_csv(observation_path).to_numpy()
-        slam_pose = observation_raw[:, 1:8]
-        phase1_pose = observation_raw[:, 9:16]
+        slam_pose = observation_raw[:, 1:INPUT_DIM +1]
+        phase1_pose = observation_raw[:, INPUT_DIM+2:INPUT_DIM*2 + 2]
         observation = np.hstack([slam_pose, phase1_pose])
 
         res_qpos = []
@@ -352,7 +347,7 @@ class EuroCStyleDatasetForSimpleTransformer(torch.utils.data.Dataset):
 
         groundtruth_path = self.id2gtpath[episode_id]
         groundtruth_raw = pd.read_csv(groundtruth_path).to_numpy()
-        groundtruth = groundtruth_raw[:, 1:8]
+        groundtruth = groundtruth_raw[:, 1:INPUT_DIM+1]
         return groundtruth
     
     def getSlamSource(self):
@@ -362,7 +357,7 @@ class EuroCStyleDatasetForSimpleTransformer(torch.utils.data.Dataset):
         observation_path = self.id2datasetpath[episode_id]
         observation_raw = pd.read_csv(observation_path).to_numpy()
         # Get only the poses  
-        slam_pose = observation_raw[:, 1:8]
+        slam_pose = observation_raw[:, 1:INPUT_DIM+1]
 
         return slam_pose
 
@@ -418,7 +413,7 @@ def load_data(dataset_dir, num_episodes, camera_names, batch_size_train, batch_s
 
     return train_dataloader, val_dataloader, norm_stats, train_dataset.is_sim
 
-def load_data_euroc(num_episodes, batch_size_train, batch_size_val):
+def load_data_euroc(num_episodes, batch_size_train, batch_size_val, policy_class):
 
     train_ratio = 0.9
 
@@ -451,15 +446,23 @@ def load_data_euroc(num_episodes, batch_size_train, batch_size_val):
 
     print(train_indices)
     print(val_indices)
-
-    train_dataset = EuroCStyleDataset(train_indices, episodeid2qposefile, episodeid2gtfile, episodeid2imagepath)
-    val_dataset = EuroCStyleDataset(val_indices, episodeid2qposefile, episodeid2gtfile, episodeid2imagepath)
+    
+    if policy_class == 'SIMPLE':
+        train_dataset = EuroCStyleDatasetForSimpleTransformer(
+            train_indices, episodeid2qposefile, episodeid2gtfile, episodeid2imagepath)
+        val_dataset = EuroCStyleDatasetForSimpleTransformer(
+            val_indices, episodeid2qposefile, episodeid2gtfile, episodeid2imagepath)
+    else:
+        train_dataset = EuroCStyleDataset(
+            train_indices, episodeid2qposefile, episodeid2gtfile, episodeid2imagepath)
+        val_dataset = EuroCStyleDataset(
+            val_indices, episodeid2qposefile, episodeid2gtfile, episodeid2imagepath)
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size_train, shuffle=True, pin_memory=True, num_workers=1, prefetch_factor=1)
     val_dataloader = DataLoader(val_dataset, batch_size=batch_size_val, shuffle=True, pin_memory=True, num_workers=1, prefetch_factor=1)
 
     return train_dataloader, val_dataloader, None, train_dataset.is_sim
 
-def load_test_euroc(i) -> EuroCStyleDataset:
+def load_test_euroc(i, policy_class):
 
     # Hardcoded as using the last one for doing the prediction
     episodeid2qposefile = {}
@@ -472,7 +475,12 @@ def load_test_euroc(i) -> EuroCStyleDataset:
     episodeid2gtfile[i] = PROFILE_RESULT_MOTHER_FOLDER + MSD_LIST[i] + GROUNDTRUTH_SUFFIX
     episodeid2imagepath[i] = PROFILE_RESULT_MOTHER_FOLDER + MSD_LIST[i] + IMAGE_PATH_SUFFIX
     
-    val_dataset = EuroCStyleDataset([i], episodeid2qposefile, episodeid2gtfile, episodeid2imagepath)
+    if policy_class == 'SIMPLE':
+        val_dataset = EuroCStyleDatasetForSimpleTransformer(
+            [i], episodeid2qposefile, episodeid2gtfile, episodeid2imagepath)
+    else:
+        val_dataset = EuroCStyleDataset(
+            [i], episodeid2qposefile, episodeid2gtfile, episodeid2imagepath)
 
     return val_dataset
     

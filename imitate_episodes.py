@@ -138,7 +138,7 @@ def main(args):
     # with open(stats_path, 'wb') as f:
     #     pickle.dump(stats, f)
     print("Batch size in train is ", batch_size_train)
-    train_dataloader, val_dataloader, _, _ = load_data_euroc(num_episodes, batch_size_train, batch_size_val)
+    train_dataloader, val_dataloader, _, _ = load_data_euroc(num_episodes, batch_size_train, batch_size_val, policy_class)
 
     best_ckpt_info = train_bc(train_dataloader, val_dataloader, config)
     best_epoch, min_val_loss, best_state_dict = best_ckpt_info
@@ -207,7 +207,7 @@ def eval_bc_euroc(config, ckpt_name):
     print(f'Loaded: {ckpt_path}')
 
     # get the dataset
-    dataset = load_test_euroc(TEST_IDX)
+    dataset = load_test_euroc(TEST_IDX, policy_class)
 
     groundtruth = dataset.getGroundtruth()
     slam_output = dataset.getSlamSource()
@@ -227,28 +227,31 @@ def eval_bc_euroc(config, ckpt_name):
         
         action_windows = [[] for _ in range(len(prediction_window))]
 
-        batch_size = 20
+        batch_size = 1
 
-        for t in range(30, gt_length // 2, batch_size):
+        if policy_class == 'SIMPLE':
+            begin_idx = 30
+        else:
+            begin_idx = 0
+
+        for t in range(begin_idx, gt_length // 2, batch_size):
         # for t in range(10030, 10100, batch_size):
             print(t)
-
-            # image, qpos = dataset.getImagePoseAt(t, batch_size)
             
-            # # time_begin = time.time_ns()
-            # all_actions = policy(qpos, image)
+            if policy_class == 'SIMPLE':
+                qpos = dataset.getPoseAt(t, batch_size)
 
-            qpos = dataset.getPoseAt(t, batch_size)
+                time_begin = time.time_ns()
+                all_actions = policy(qpos)
+            else:
+
+                image, qpos = dataset.getImagePoseAt(t, batch_size)
+                
+                time_begin = time.time_ns()
+                all_actions = policy(qpos, image)
             
-            all_actions = policy(qpos)
-            print(qpos.shape, all_actions.shape)
-            print("--------")
-            print(groundtruth[t])
-
-            # for action in all_actions:
-            #     print(action)
-            # time_end = time.time_ns()
-            # print("Inference time:", (time_end - time_begin) / 1000000, " ms")
+            time_end = time.time_ns()
+            print("Inference time:", (time_end - time_begin) / 1000000, " ms")
             
             # We aim at the target of different prediction window
             for i, window in enumerate(prediction_window):
@@ -291,19 +294,27 @@ def eval_bc_euroc(config, ckpt_name):
 
 
 
-def compute_result_from_file():
+def compute_result_from_file(args):
+
+    policy_class = args['policy_class']
 
     # Read the groundtruth
-    dataset = load_test_euroc(TEST_IDX)
+    dataset = load_test_euroc(TEST_IDX, policy_class)
     groundtruth = dataset.getGroundtruth()
     slam_output = dataset.getSlamSource()
 
     fig_pos, ax_pos = plt.subplots()
     fig_orient, ax_orient = plt.subplots()
 
+    action_len = len(groundtruth)
+
+    # prefix="/media/wuhaolu/c54fff3f-cab5-4dcf-94c3-c83855e5a9bd/ACT_Result/full/"
+
     for window in prediction_window:
         actions = pd.read_csv("res_" + str(window) + ".csv").to_numpy()
         print(len(actions))
+
+        action_len = min(len(actions), action_len)
 
         if (window == 0):
             pose_diff_list, angle_diff_list = computePoseDiffFromNumpy(actions, groundtruth[:len(actions)])
@@ -311,6 +322,7 @@ def compute_result_from_file():
             pose_diff_list, angle_diff_list = computePoseDiffFromNumpy(actions[:-window], groundtruth[window:len(actions)])
 
         print("windows size:", window)
+        print("Action len:", action_len)
         print(np.average(pose_diff_list), np.average(angle_diff_list))
         
 
@@ -323,7 +335,11 @@ def compute_result_from_file():
         ax_orient.plot(data_sorted, cdf, label="Phase2 error rate with window " + str(window))
 
     pose_diff_computed_slam_and_gt_slam, \
-    angle_diff_computed_slam_and_gt_slam = computePoseDiffFromNumpy(slam_output, groundtruth)
+    angle_diff_computed_slam_and_gt_slam = computePoseDiffFromNumpy(slam_output[:action_len], groundtruth[:action_len])
+    
+    print("SLAM source average error:", 
+          np.average(pose_diff_computed_slam_and_gt_slam),
+          np.average(angle_diff_computed_slam_and_gt_slam))
     
     data_sorted = np.sort(pose_diff_computed_slam_and_gt_slam)
     cdf = np.arange(1, len(data_sorted) + 1) / len(data_sorted)
@@ -341,9 +357,12 @@ def compute_result_from_file():
     # Add LSTM for comparison
 
 
-def compute_result_from_euler_file():
+def compute_result_from_euler_file(args):
+
+    policy_class = args['policy_class']
+
     # Read the groundtruth
-    dataset = load_test_euroc(TEST_IDX)
+    dataset = load_test_euroc(TEST_IDX, policy_class)
     groundtruth = dataset.getGroundtruth()
     slam_output = dataset.getSlamSource()
 
@@ -551,15 +570,15 @@ def eval_bc(config, ckpt_name, save_episode=True):
         f.write(repr(highest_rewards))
 
 
-# def forward_pass(data, policy):
-#     image_data, qpos_data, action_data, is_pad = data
-#     image_data, qpos_data, action_data, is_pad = image_data.cuda(), qpos_data.cuda(), action_data.cuda(), is_pad.cuda()
-#     return policy(qpos_data, image_data, action_data, is_pad) # TODO remove None
-
-def forward_pass(data, policy):
-    qpos_data, action_data, is_pad = data
-    qpos_data, action_data, is_pad = qpos_data.cuda(), action_data.cuda(), is_pad.cuda()
-    return policy(qpos_data, action_data, is_pad)
+def forward_pass(data, policy, policy_class):
+    if policy_class == 'SIMPLE':
+        qpos_data, action_data, is_pad = data
+        qpos_data, action_data, is_pad = qpos_data.cuda(), action_data.cuda(), is_pad.cuda()
+        return policy(qpos_data, action_data, is_pad)
+    else:
+        image_data, qpos_data, action_data, is_pad = data
+        image_data, qpos_data, action_data, is_pad = image_data.cuda(), qpos_data.cuda(), action_data.cuda(), is_pad.cuda()
+        return policy(qpos_data, image_data, action_data, is_pad) # TODO remove None
 
 
 def train_bc(train_dataloader, val_dataloader, config):
@@ -586,7 +605,7 @@ def train_bc(train_dataloader, val_dataloader, config):
             policy.eval()
             epoch_dicts = []
             for batch_idx, data in enumerate(val_dataloader):
-                forward_dict = forward_pass(data, policy)
+                forward_dict = forward_pass(data, policy, policy_class)
                 epoch_dicts.append(forward_dict)
             epoch_summary = compute_dict_mean(epoch_dicts)
             validation_history.append(epoch_summary)
@@ -606,7 +625,7 @@ def train_bc(train_dataloader, val_dataloader, config):
         optimizer.zero_grad()
         for batch_idx, data in enumerate(train_dataloader):
             # print("batch_idx, ", batch_idx)
-            forward_dict = forward_pass(data, policy)
+            forward_dict = forward_pass(data, policy, policy_class)
             # backward
             loss = forward_dict['loss']
             loss.backward()
@@ -679,5 +698,4 @@ if __name__ == '__main__':
     
     main(vars(parser.parse_args()))
 
-# if __name__ == '__main__':
-    # compute_result_from_file()
+    compute_result_from_file(vars(parser.parse_args()))

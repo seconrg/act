@@ -9,6 +9,10 @@ from .backbone import build_backbone
 from .transformer import build_transformer, TransformerEncoder, TransformerEncoderLayer
 from .simple_transformer import *
 
+import sys
+sys.path.append('/home/wuhaolu/Documents/pose_prediction/')
+from act.utils import INPUT_DIM
+
 import numpy as np
 
 import IPython
@@ -45,6 +49,10 @@ class DETRVAE(nn.Module):
             aux_loss: True if auxiliary decoding losses (loss at each decoder layer) are to be used.
         """
         super().__init__()
+        # dim for each poses, 7 if using quat orient, 6 if using euler
+        self.pos_dim = INPUT_DIM
+        self.num_qpos = 1
+
         self.num_queries = num_queries
         self.camera_names = camera_names
         self.transformer = transformer
@@ -56,34 +64,32 @@ class DETRVAE(nn.Module):
         if backbones is not None:
             self.input_proj = nn.Conv2d(backbones[0].num_channels, hidden_dim, kernel_size=1)
             self.backbones = nn.ModuleList(backbones)
-            self.input_proj_robot_state = nn.Linear(14, hidden_dim)
-            self.input_proj_slam = nn.Linear(7, hidden_dim)
-            self.input_proj_phase1 = nn.Linear(7, hidden_dim)
+            self.input_proj_robot_state = nn.Linear(self.pos_dim * 2, hidden_dim)
+            self.input_proj_slam = nn.Linear(self.pos_dim, hidden_dim)
+            self.input_proj_phase1 = nn.Linear(self.pos_dim, hidden_dim)
         else:
             # input_dim = 14 + 7 # robot_state + env_state
-            self.input_proj_robot_state = nn.Linear(14, hidden_dim)
-            self.input_proj_slam = nn.Linear(7, hidden_dim)
-            self.input_proj_phase1 = nn.Linear(7, hidden_dim)
-            self.input_proj_env_state = nn.Linear(7, hidden_dim)
+            self.input_proj_robot_state = nn.Linear(self.pos_dim * 2, hidden_dim)
+            self.input_proj_slam = nn.Linear(self.pos_dim, hidden_dim)
+            self.input_proj_phase1 = nn.Linear(self.pos_dim, hidden_dim)
+            self.input_proj_env_state = nn.Linear(self.pos_dim, hidden_dim)
             self.pos = torch.nn.Embedding(2, hidden_dim)
             self.backbones = None
 
         # encoder extra parameters
         self.latent_dim = 32 # final size of latent z # TODO tune
         self.cls_embed = nn.Embedding(1, hidden_dim) # extra cls token embedding
-        self.encoder_action_proj = nn.Linear(7, hidden_dim) # project action to embedding
-        self.encoder_joint_proj = nn.Linear(14, hidden_dim)  # project qpos to embedding
-        self.encoder_joint_proj_slam = nn.Linear(7, hidden_dim)
-        self.encoder_joint_proj_phase1 = nn.Linear(7, hidden_dim)
+        self.encoder_action_proj = nn.Linear(self.pos_dim, hidden_dim) # project action to embedding
+        self.encoder_joint_proj = nn.Linear(self.pos_dim * 2, hidden_dim)  # project qpos to embedding
+        self.encoder_joint_proj_slam = nn.Linear(self.pos_dim, hidden_dim)
+        self.encoder_joint_proj_phase1 = nn.Linear(self.pos_dim, hidden_dim)
 
         self.latent_proj = nn.Linear(hidden_dim, self.latent_dim*2) # project hidden state to latent std, var
-        self.register_buffer('pos_table', get_sinusoid_encoding_table(1+2+num_queries, hidden_dim)) # [CLS], qpos, a_seq
-        # self.register_buffer('pos_table', get_sinusoid_encoding_table(1+1+num_queries, hidden_dim)) # [CLS], qpos, a_seq
+        self.register_buffer('pos_table', get_sinusoid_encoding_table(1+self.num_qpos+num_queries, hidden_dim)) # [CLS], qpos, a_seq
 
         # decoder extra parameters
         self.latent_out_proj = nn.Linear(self.latent_dim, hidden_dim) # project latent sample to embedding
-        self.additional_pos_embed = nn.Embedding(3, hidden_dim) # learned position embedding for proprio and latent
-        # self.additional_pose_embed = nn.Embedding(2, hidden_dim) # learned position embedding for proprio and latent
+        self.additional_pos_embed = nn.Embedding(1 + self.num_qpos, hidden_dim) # learned position embedding for proprio and latent
 
     def forward(self, qpos, image, env_state, actions=None, is_pad=None):
         """
@@ -99,26 +105,31 @@ class DETRVAE(nn.Module):
             # project action sequence to embedding dim, and concat with a CLS token
             action_embed = self.encoder_action_proj(actions) # (bs, seq, hidden_dim)
             
-            slam_embed = self.encoder_joint_proj_slam(qpos[:, 0:7])
-            phase1_embed = self.encoder_joint_proj_phase1(qpos[:, 7:14])
+            qpos_embed = self.encoder_joint_proj(qpos)
+            slam_embed = self.encoder_joint_proj_slam(qpos[:, 0:self.pos_dim])
+            phase1_embed = self.encoder_joint_proj_phase1(qpos[:, self.pos_dim:self.pos_dim*2])
 
+            qpos_embed = torch.unsqueeze(qpos_embed, axis=1)  # (bs, 1, hidden_dim)
             slam_embed = torch.unsqueeze(slam_embed, axis = 1)
             phase1_embed = torch.unsqueeze(phase1_embed, axis = 1)
-            # qpos_embed = self.encoder_joint_proj(qpos)  # (bs, hidden_dim)
-            # qpos_embed = torch.unsqueeze(qpos_embed, axis=1)  # (bs, 1, hidden_dim)
+            
             cls_embed = self.cls_embed.weight # (1, hidden_dim)
             cls_embed = torch.unsqueeze(cls_embed, axis=0).repeat(bs, 1, 1) # (bs, 1, hidden_dim)
-            encoder_input = torch.cat([cls_embed, slam_embed, phase1_embed, action_embed], axis=1) # (bs, seq+1, hidden_dim)
-            # encoder_input = torch.cat([cls_embed, slam_embed, action_embed], axis=1) # (bs, seq+1, hidden_dim)
+            
+            if self.num_qpos == 2:
+                encoder_input = torch.cat([cls_embed, slam_embed, phase1_embed, action_embed], axis=1) # (bs, seq+1, hidden_dim)
+            else:
+                encoder_input = torch.cat([cls_embed, qpos_embed, action_embed], axis=1) # (bs, seq+1, hidden_dim)
+            
             encoder_input = encoder_input.permute(1, 0, 2) # (seq+1, bs, hidden_dim)
             # do not mask cls token
-            cls_joint_is_pad = torch.full((bs, 3), False).to(qpos.device) # False: not a padding
-            # cls_joint_is_pad = torch.full((bs, 2), False).to(qpos.device) # False: not a padding
+            cls_joint_is_pad = torch.full((bs, 1 + self.num_qpos), False).to(qpos.device) # False: not a padding
             is_pad = torch.cat([cls_joint_is_pad, is_pad], axis=1)  # (bs, seq+1)
             # obtain position embedding
             pos_embed = self.pos_table.clone().detach()
             pos_embed = pos_embed.permute(1, 0, 2)  # (seq+1, 1, hidden_dim)
             # query model
+            print(pos_embed.shape, is_pad.shape)
             encoder_output = self.encoder(encoder_input, pos=pos_embed, src_key_padding_mask=is_pad)
             encoder_output = encoder_output[0] # take cls output only
             latent_info = self.latent_proj(encoder_output)
@@ -144,22 +155,30 @@ class DETRVAE(nn.Module):
             # proprioception features
             proprio_input = self.input_proj_robot_state(qpos)
 
-            proprio_slam = self.input_proj_slam(qpos[:, 0:7])
-            proprio_phase1 = self.input_proj_phase1(qpos[:, 7:14])
+            proprio_slam = self.input_proj_slam(qpos[:, 0: self.pos_dim])
+            proprio_phase1 = self.input_proj_phase1(qpos[:, self.pos_dim:self.pos_dim * 2])
 
             # fold camera dimension into width dimension
             src = torch.cat(all_cam_features, axis=3)
             pos = torch.cat(all_cam_pos, axis=3)
-            hs = self.transformer(src, None, self.query_embed.weight, pos, latent_input, proprio_slam, proprio_phase1, self.additional_pos_embed.weight)[0]
+
+            # If num_qpos is 1, we just 
+            if self.num_qpos == 1:
+                proprio_slam = proprio_input
+            hs = self.transformer(src, None, self.query_embed.weight, pos, latent_input, proprio_slam, proprio_phase1, self.num_qpos, self.additional_pos_embed.weight)[0]
         else:
             qpos = self.input_proj_robot_state(qpos)
 
-            slam = self.input_proj_slam(qpos[:, 0:7])
-            phase1 = self.input_proj_phase1(qpos[:, 7:14])
+            slam = self.input_proj_slam(qpos[:, 0: self.pos_dim])
+            phase1 = self.input_proj_phase1(qpos[:, self.pos_dim: self.pos_dim * 2])
             
             env_state = self.input_proj_env_state(env_state)
-            transformer_input = torch.cat([slam, phase1, env_state], axis=1) # seq length = 2
-            # transformer_input = torch.cat([slam, env_state], axis=1) # seq length = 2
+            
+            if self.num_qpos == 2:
+                transformer_input = torch.cat([slam, phase1, env_state], axis=1) # seq length = 2
+            else:
+                transformer_input = torch.cat([qpos, env_state], axis=1) # seq length = 2
+            
             hs = self.transformer(transformer_input, None, self.query_embed.weight, self.pos.weight)[0]
         a_hat = self.action_head(hs)
         is_pad_hat = self.is_pad_head(hs)

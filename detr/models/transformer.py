@@ -47,7 +47,7 @@ class Transformer(nn.Module):
                 nn.init.xavier_uniform_(p)
     
     # def forward(self, src, mask, query_embed, pos_embed, latent_input=None, proprio_input=None, additional_pos_embed=None):
-    def forward(self, src, mask, query_embed, pos_embed, latent_input=None, proprio_slam=None, proprio_phase1=None, additional_pos_embed=None):
+    def forward(self, src, mask, query_embed, pos_embed, latent_input=None, proprio_slam=None, proprio_phase1=None, num_qpos=1, additional_pos_embed=None):
         # src is the image that has been fed into the result
         # TODO flatten only when input has H and W
         if len(src.shape) == 4: # has H and W
@@ -60,9 +60,11 @@ class Transformer(nn.Module):
 
             additional_pos_embed = additional_pos_embed.unsqueeze(1).repeat(1, bs, 1) # seq, bs, dim
             pos_embed = torch.cat([additional_pos_embed, pos_embed], axis=0)
-
-            # addition_input = torch.stack([latent_input, proprio_input], axis=0)
-            addition_input = torch.stack([latent_input, proprio_slam, proprio_phase1], axis=0)
+            
+            if num_qpos == 1:
+                addition_input = torch.stack([latent_input, proprio_slam], axis=0)
+            else:
+                addition_input = torch.stack([latent_input, proprio_slam, proprio_phase1], axis=0)
             src = torch.cat([addition_input, src], axis=0)
         else:
             assert len(src.shape) == 3
