@@ -194,7 +194,7 @@ class EuroCStyleDataset(torch.utils.data.Dataset):
 
     def getImagePoseAt(self, index, batch_size):
 
-        episode_id = len(MSD_LIST)-1
+        episode_id = TEST_IDX
 
         observation_path = self.id2datasetpath[episode_id]
         camera_path = self.id2camerapaths[episode_id]
@@ -240,7 +240,7 @@ class EuroCStyleDataset(torch.utils.data.Dataset):
     
     def getGroundtruth(self):
 
-        episode_id = len(MSD_LIST) - 1
+        episode_id = TEST_IDX
 
         groundtruth_path = self.id2gtpath[episode_id]
         groundtruth_raw = pd.read_csv(groundtruth_path).to_numpy()
@@ -250,7 +250,7 @@ class EuroCStyleDataset(torch.utils.data.Dataset):
 
     def getSlamSource(self):
 
-        episode_id = len(MSD_LIST)-1
+        episode_id = TEST_IDX
 
         observation_path = self.id2datasetpath[episode_id]
         observation_raw = pd.read_csv(observation_path).to_numpy()
@@ -452,25 +452,27 @@ def load_data_euroc(num_episodes, batch_size_train, batch_size_val):
     print(train_indices)
     print(val_indices)
 
-    train_dataset = EuroCStyleDatasetForSimpleTransformer(train_indices, episodeid2qposefile, episodeid2gtfile, episodeid2imagepath)
-    val_dataset = EuroCStyleDatasetForSimpleTransformer(val_indices, episodeid2qposefile, episodeid2gtfile, episodeid2imagepath)
+    train_dataset = EuroCStyleDataset(train_indices, episodeid2qposefile, episodeid2gtfile, episodeid2imagepath)
+    val_dataset = EuroCStyleDataset(val_indices, episodeid2qposefile, episodeid2gtfile, episodeid2imagepath)
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size_train, shuffle=True, pin_memory=True, num_workers=1, prefetch_factor=1)
     val_dataloader = DataLoader(val_dataset, batch_size=batch_size_val, shuffle=True, pin_memory=True, num_workers=1, prefetch_factor=1)
 
     return train_dataloader, val_dataloader, None, train_dataset.is_sim
 
-def load_test_euroc(i) -> EuroCStyleDatasetForSimpleTransformer:
+def load_test_euroc(i) -> EuroCStyleDataset:
 
     # Hardcoded as using the last one for doing the prediction
     episodeid2qposefile = {}
     episodeid2gtfile = {}
     episodeid2imagepath = {}
 
+    print(PROFILE_RESULT_MOTHER_FOLDER + MSD_LIST[i])
+
     episodeid2qposefile[i] = PROFILE_RESULT_MOTHER_FOLDER + MSD_LIST[i] + ALIGNED_POSE_SUFFIX
     episodeid2gtfile[i] = PROFILE_RESULT_MOTHER_FOLDER + MSD_LIST[i] + GROUNDTRUTH_SUFFIX
     episodeid2imagepath[i] = PROFILE_RESULT_MOTHER_FOLDER + MSD_LIST[i] + IMAGE_PATH_SUFFIX
     
-    val_dataset = EuroCStyleDatasetForSimpleTransformer([i], episodeid2qposefile, episodeid2gtfile, episodeid2imagepath)
+    val_dataset = EuroCStyleDataset([i], episodeid2qposefile, episodeid2gtfile, episodeid2imagepath)
 
     return val_dataset
     
