@@ -16,7 +16,9 @@ import cv2
 import IPython
 e = IPython.embed
 
-INPUT_DIM = 7
+# Source of the profile result folder, currently have euler format and quat format
+INPUT_DIM = 6
+PROFILE_RESULT_FOLDER = PROFILE_RESULT_EULER_FOLDER
 
 class EpisodicDataset(torch.utils.data.Dataset):
     def __init__(self, episode_ids, dataset_dir, camera_names, norm_stats):
@@ -331,7 +333,7 @@ class EuroCStyleDatasetForSimpleTransformer(torch.utils.data.Dataset):
 
         for i in range(index, min(index + batch_size, len(observation))):
             qpos = np.asarray(observation[i + 1 - self.qpos_len:i+1])
-            print("qpos:", qpos)
+            # print("qpos:", qpos)
             qpos = np.reshape(qpos, -1)
             qpos_data = torch.from_numpy(qpos).float().cuda()
             res_qpos.append(qpos_data)
@@ -420,7 +422,7 @@ def load_data_euroc(num_episodes, batch_size_train, batch_size_val, policy_class
     shuffled_indices = np.random.permutation(num_episodes)
     
     file_list = []
-    with open(PROFILE_RESULT_MOTHER_FOLDER + PROFILE_RESULT_FILE_LIST, 'r') as fd:
+    with open(PROFILE_RESULT_FOLDER + PROFILE_RESULT_FILE_LIST, 'r') as fd:
         line = fd.readline()
         line = fd.readline()
         while line:
@@ -437,9 +439,9 @@ def load_data_euroc(num_episodes, batch_size_train, batch_size_val, policy_class
     episodeid2imagepath = {}
 
     for i in range(len(file_list)):
-        episodeid2qposefile[i] = PROFILE_RESULT_MOTHER_FOLDER + file_list[i] + ALIGNED_POSE_SUFFIX
-        episodeid2gtfile[i] = PROFILE_RESULT_MOTHER_FOLDER + file_list[i] + GROUNDTRUTH_SUFFIX
-        episodeid2imagepath[i] = PROFILE_RESULT_MOTHER_FOLDER + file_list[i] + IMAGE_PATH_SUFFIX
+        episodeid2qposefile[i] = PROFILE_RESULT_FOLDER + file_list[i] + ALIGNED_POSE_SUFFIX
+        episodeid2gtfile[i] = PROFILE_RESULT_FOLDER + file_list[i] + GROUNDTRUTH_SUFFIX
+        episodeid2imagepath[i] = PROFILE_RESULT_FOLDER + file_list[i] + IMAGE_PATH_SUFFIX
     
     train_indices = shuffled_indices[:int(train_ratio * num_episodes)]
     val_indices = shuffled_indices[int(train_ratio * num_episodes):]
@@ -469,11 +471,11 @@ def load_test_euroc(i, policy_class):
     episodeid2gtfile = {}
     episodeid2imagepath = {}
 
-    print(PROFILE_RESULT_MOTHER_FOLDER + MSD_LIST[i])
+    print(PROFILE_RESULT_FOLDER + MSD_LIST[i])
 
-    episodeid2qposefile[i] = PROFILE_RESULT_MOTHER_FOLDER + MSD_LIST[i] + ALIGNED_POSE_SUFFIX
-    episodeid2gtfile[i] = PROFILE_RESULT_MOTHER_FOLDER + MSD_LIST[i] + GROUNDTRUTH_SUFFIX
-    episodeid2imagepath[i] = PROFILE_RESULT_MOTHER_FOLDER + MSD_LIST[i] + IMAGE_PATH_SUFFIX
+    episodeid2qposefile[i] = PROFILE_RESULT_FOLDER + MSD_LIST[i] + ALIGNED_POSE_SUFFIX
+    episodeid2gtfile[i] = PROFILE_RESULT_FOLDER + MSD_LIST[i] + GROUNDTRUTH_SUFFIX
+    episodeid2imagepath[i] = PROFILE_RESULT_FOLDER + MSD_LIST[i] + IMAGE_PATH_SUFFIX
     
     if policy_class == 'SIMPLE':
         val_dataset = EuroCStyleDatasetForSimpleTransformer(

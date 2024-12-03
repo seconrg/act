@@ -40,18 +40,14 @@ class ACTPolicy(nn.Module):
             #                                                  a_hat.cpu().detach().numpy()[0])
             # poseLoss = CustomLoss()
             # pose_diff, angle_diff = poseLoss(actions, a_hat)
-            # print(pose_diff, angle_diff)
 
             l1 = (all_l1 * ~is_pad.unsqueeze(-1)).mean()
             loss_dict['l1'] = l1
             loss_dict['kl'] = total_kld[0]
             loss_dict['loss'] = loss_dict['l1'] + loss_dict['kl'] * self.kl_weight
-            # loss_dict['pose'] = torch.tensor((np.average(pose_diff) + np.average(angle_diff)) / 2).cuda(0)
-            # print("pose loss is ", loss_dict['pose'], loss_dict['l1'])
-
+            
             return loss_dict
         else: # inference time
-            # TODO: For the pose prediction, the model should also accept input for a future time
             a_hat, _, (_, _) = self.model(qpos, image, env_state) # no action, sample from prior
             return a_hat
 
@@ -72,7 +68,7 @@ class CNNMLPPolicy(nn.Module):
                                          std=[0.229, 0.224, 0.225])
         image = normalize(image)
         if actions is not None: # training time
-            actions = actions[:, 0]
+            actions = actions[:, :self.model.num_queries]
             a_hat = self.model(qpos, image, env_state, actions)
             mse = F.mse_loss(actions, a_hat)
             loss_dict = dict()

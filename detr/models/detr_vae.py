@@ -51,7 +51,7 @@ class DETRVAE(nn.Module):
         super().__init__()
         # dim for each poses, 7 if using quat orient, 6 if using euler
         self.pos_dim = INPUT_DIM
-        self.num_qpos = 1
+        self.num_qpos = 2
 
         self.num_queries = num_queries
         self.camera_names = camera_names
@@ -129,7 +129,6 @@ class DETRVAE(nn.Module):
             pos_embed = self.pos_table.clone().detach()
             pos_embed = pos_embed.permute(1, 0, 2)  # (seq+1, 1, hidden_dim)
             # query model
-            print(pos_embed.shape, is_pad.shape)
             encoder_output = self.encoder(encoder_input, pos=pos_embed, src_key_padding_mask=is_pad)
             encoder_output = encoder_output[0] # take cls output only
             latent_info = self.latent_proj(encoder_output)
@@ -187,7 +186,7 @@ class DETRVAE(nn.Module):
 
 
 class CNNMLP(nn.Module):
-    def __init__(self, backbones, state_dim, camera_names):
+    def __init__(self, backbones, state_dim, camera_names, num_queries):
         """ Initializes the model.
         Parameters:
             backbones: torch module of the backbone to be used. See backbone.py
@@ -198,6 +197,7 @@ class CNNMLP(nn.Module):
             aux_loss: True if auxiliary decoding losses (loss at each decoder layer) are to be used.
         """
         super().__init__()
+        self.num_queries = num_queries
         self.camera_names = camera_names
         self.action_head = nn.Linear(1000, state_dim) # TODO add more
         if backbones is not None:
@@ -212,8 +212,9 @@ class CNNMLP(nn.Module):
                 backbone_down_projs.append(down_proj)
             self.backbone_down_projs = nn.ModuleList(backbone_down_projs)
 
-            mlp_in_dim = 768 * len(backbones) + 14
-            self.mlp = mlp(input_dim=mlp_in_dim, hidden_dim=1024, output_dim=14, hidden_depth=2)
+            mlp_in_dim = 10368 * len(backbones) + INPUT_DIM * 2
+            print("create info: ", len(backbones), mlp_in_dim)
+            self.mlp = mlp(input_dim=mlp_in_dim, hidden_dim=1024, output_dim=INPUT_DIM * self.num_queries, hidden_depth=2)
         else:
             raise NotImplementedError
 
@@ -237,9 +238,11 @@ class CNNMLP(nn.Module):
         flattened_features = []
         for cam_feature in all_cam_features:
             flattened_features.append(cam_feature.reshape([bs, -1]))
-        flattened_features = torch.cat(flattened_features, axis=1) # 768 each
+            
+        flattened_features = torch.cat(flattened_features, axis=1) # 10368 each
         features = torch.cat([flattened_features, qpos], axis=1) # qpos: 14
         a_hat = self.mlp(features)
+        a_hat = a_hat.reshape([bs, self.num_queries, -1])
         return a_hat
 
 
@@ -273,7 +276,7 @@ def build_encoder(args):
 
 
 def build(args):
-    state_dim = 7 #TODO hardcode
+    state_dim = INPUT_DIM #TODO hardcode
 
     # From state
     # backbone = None # from state for now, no need for conv nets
@@ -301,7 +304,7 @@ def build(args):
     return model
 
 def build_cnnmlp(args):
-    state_dim = 7 #TODO hardcode
+    state_dim = INPUT_DIM #TODO hardcode
 
     # From state
     # backbone = None # from state for now, no need for conv nets
@@ -315,6 +318,7 @@ def build_cnnmlp(args):
         backbones,
         state_dim=state_dim,
         camera_names=args.camera_names,
+        num_queries = args.num_queries, 
     )
 
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -323,7 +327,7 @@ def build_cnnmlp(args):
     return model
 
 def build_simple_transformer(args):
-    state_dim = 7 #TODO hardcode
+    state_dim = INPUT_DIM #TODO hardcode
 
     transformer = build_transformer(args)
     encoder = build_encoder(args)
