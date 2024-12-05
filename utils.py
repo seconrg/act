@@ -13,8 +13,6 @@ from PosePrediction.utils import *
 import pandas as pd
 import cv2
 
-import IPython
-e = IPython.embed
 
 # Source of the profile result folder, currently have euler format and quat format
 INPUT_DIM = 6

@@ -59,13 +59,13 @@ class Transformer(nn.Module):
             # mask = mask.flatten(1)
 
             additional_pos_embed = additional_pos_embed.unsqueeze(1).repeat(1, bs, 1) # seq, bs, dim
-            pos_embed = torch.cat([additional_pos_embed, pos_embed], axis=0)
+            pos_embed = torch.cat([additional_pos_embed, pos_embed], dim=0)
             
             if num_qpos == 1:
-                addition_input = torch.stack([latent_input, proprio_slam], axis=0)
+                addition_input = torch.stack([latent_input, proprio_slam], dim=0)
             else:
-                addition_input = torch.stack([latent_input, proprio_slam, proprio_phase1], axis=0)
-            src = torch.cat([addition_input, src], axis=0)
+                addition_input = torch.stack([latent_input, proprio_slam, proprio_phase1], dim=0)
+            src = torch.cat([addition_input, src], dim=0)
         else:
             assert len(src.shape) == 3
             # flatten NxHWxC to HWxNxC
@@ -73,7 +73,7 @@ class Transformer(nn.Module):
             src = src.permute(1, 0, 2)
             pos_embed = pos_embed.unsqueeze(1).repeat(1, bs, 1)
             query_embed = query_embed.unsqueeze(1).repeat(1, bs, 1)
-            src = torch.cat([pos_embed, src], axis =0)
+            src = torch.cat([pos_embed, src], dim=0)
 
         tgt = torch.zeros_like(query_embed)
         memory = self.encoder(src, src_key_padding_mask=mask, pos=pos_embed)

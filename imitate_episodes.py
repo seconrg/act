@@ -21,15 +21,21 @@ import time
 import pandas as pd
 
 import sys
-sys.path.append('/home/wuhaolu/Documents/pose_prediction/')
-from PosePrediction.utils import * 
+sys.path.append('/home/wuhaolu/Documents/pose_prediction/PosePrediction')
+from utils import * 
+from predictPoseAct import generateTrainIndex
 
 from sim_env import BOX_POSE
 
 import IPython
 e = IPython.embed
 
-prediction_window = [0, 10, 18, 45, 90]
+prediction_window = [0, 
+                     10, 
+                     18, 
+                    #  45, 
+                    #  90
+                     ]
 
 
 
@@ -59,7 +65,7 @@ def main(args):
     camera_names = task_config['camera_names']
 
     # fixed parameters
-    state_dim = 7
+    state_dim = INPUT_DIM
     lr_backbone = 1e-5
     backbone = 'resnet18'
     if policy_class == 'ACT':
@@ -79,12 +85,12 @@ def main(args):
                          'camera_names': camera_names,
                          }
     elif policy_class == 'CNNMLP':
-        policy_config = {'lr': args['lr'], 'lr_backbone': lr_backbone, 'backbone' : backbone, 'num_queries': 1,
+        policy_config = {'lr': args['lr'], 'lr_backbone': lr_backbone, 'backbone' : backbone, 'num_queries': args['chunk_size'],
                          'camera_names': camera_names,}
     elif policy_class == 'SIMPLE':
-        enc_layers = 4
-        dec_layers = 7
-        nheads = 8
+        enc_layers = 1
+        dec_layers = 2
+        nheads = 4
         policy_config = {'lr': args['lr'],
                          'num_queries': args['chunk_size'],
                          'kl_weight': args['kl_weight'],
@@ -147,6 +153,16 @@ def main(args):
     ckpt_path = os.path.join(ckpt_dir, f'policy_best.ckpt')
     torch.save(best_state_dict, ckpt_path)
     print(f'Best ckpt, val loss {min_val_loss:.6f} @ epoch{best_epoch}')
+
+    # Writeback the params and other key factors for this training
+    with open("model_param.txt", "w") as param_file:
+        param_file.write("model name: "+ policy_class + "\n")
+        param_file.write("encoder layers: "+ str(policy_config['enc_layers']) + "\n")
+        param_file.write("dec_layers: "+ str(policy_config['dec_layers']) + "\n")
+        param_file.write("nheads: "+ str(policy_config['nheads']) + "\n")
+        param_file.write("test_index: "+ str(TEST_IDX) + "\n")
+        param_file.write("test_name: "+ MSD_LIST[TEST_IDX] + "\n")
+
 
 
 def make_policy(policy_class, policy_config):
@@ -233,9 +249,10 @@ def eval_bc_euroc(config, ckpt_name):
             begin_idx = 30
         else:
             begin_idx = 0
+        print(gt_length)
 
         for t in range(begin_idx, gt_length // 2, batch_size):
-        # for t in range(10030, 10100, batch_size):
+        # for t in range(begin_idx, 1000, batch_size):
             print(t)
             
             if policy_class == 'SIMPLE':
@@ -243,15 +260,16 @@ def eval_bc_euroc(config, ckpt_name):
 
                 time_begin = time.time_ns()
                 all_actions = policy(qpos)
+                time_end = time.time_ns()
+                print("Inference time:", (time_end - time_begin) / 1000000, " ms")
             else:
 
                 image, qpos = dataset.getImagePoseAt(t, batch_size)
                 
                 time_begin = time.time_ns()
                 all_actions = policy(qpos, image)
-            
-            time_end = time.time_ns()
-            print("Inference time:", (time_end - time_begin) / 1000000, " ms")
+                time_end = time.time_ns()
+                print("Inference time:", (time_end - time_begin) / 1000000, " ms")
             
             # We aim at the target of different prediction window
             for i, window in enumerate(prediction_window):
@@ -274,6 +292,8 @@ def eval_bc_euroc(config, ckpt_name):
         # Compute the pose error rate
         for i, window in enumerate(prediction_window):
             raw_actions = action_windows[i]
+            print(raw_actions)
+            print(groundtruth)
             pose_diff_list, angle_diff_list = computePoseDiffFromNumpy(raw_actions[:-window], groundtruth[window:])
 
             data_sorted = np.sort(pose_diff_list)
@@ -308,10 +328,11 @@ def compute_result_from_file(args):
 
     action_len = len(groundtruth)
 
-    # prefix="/media/wuhaolu/c54fff3f-cab5-4dcf-94c3-c83855e5a9bd/ACT_Result/full/"
+    prefix = args['ckpt_dir']
+    # prefix=""
 
     for window in prediction_window:
-        actions = pd.read_csv("res_" + str(window) + ".csv").to_numpy()
+        actions = pd.read_csv(prefix + "res_" + str(window) + ".csv").to_numpy()
         print(len(actions))
 
         action_len = min(len(actions), action_len)
@@ -368,10 +389,13 @@ def compute_result_from_euler_file(args):
 
     fig_pos, ax_pos = plt.subplots()
     fig_orient, ax_orient = plt.subplots(3)
-
+    
+    # prefix = "/media/wuhaolu/c54fff3f-cab5-4dcf-94c3-c83855e5a9bd/ACT_Result/full/"
+    # prefix =""
+    prefix = args['ckpt_dir'] + '/'
 
     for window in prediction_window:
-        actions = pd.read_csv("res_" + str(window) + ".csv").to_numpy()
+        actions = pd.read_csv(prefix + "res_" + str(window) + ".csv").to_numpy()[:,:6]
         print(len(actions))
 
         if (window == 0):
@@ -379,12 +403,13 @@ def compute_result_from_euler_file(args):
             groundtruth = groundtruth[:len(actions)]
         else:
             actions = actions[:-window]
-            groundtruth = groundtruth[window:len(actions)]
+            groundtruth = groundtruth[:len(actions)]
 
+        print(actions.shape, groundtruth.shape)
         pose_diff_list = [np.linalg.norm(action[:3] - groundtruth[:3]) for action, groundtruth in zip(actions, groundtruth)]
-        yaw_list = np.abs(actions[: 3] - groundtruth[: 3])
-        pitch_list = np.abs(actions[: 4] - groundtruth[: 4])
-        roll_list = np.abs(actions[: 5] - groundtruth[: 5])
+        yaw_list = np.abs(actions[:,3] - groundtruth[:, 3]) * 180.0
+        pitch_list = np.abs(actions[:, 4] - groundtruth[:, 4]) * 90.0
+        roll_list = np.abs(actions[:, 5] - groundtruth[:, 5]) * 180.0
 
         print("windows size:", window)
         print(np.average(pose_diff_list), np.average(yaw_list), np.average(pitch_list), np.average(roll_list))
@@ -408,17 +433,32 @@ def compute_result_from_euler_file(args):
 
     pose_diff_computed_slam_and_gt_slam, \
     angle_diff_computed_slam_and_gt_slam = computePoseDiffFromNumpy(slam_output, groundtruth)
+
+    print("SLAM source average error:", 
+          np.average(pose_diff_computed_slam_and_gt_slam),
+          np.average(angle_diff_computed_slam_and_gt_slam, axis=0))
+
+    data_sorted = np.sort(angle_diff_computed_slam_and_gt_slam[:,0])
+    print(len(data_sorted))
+    cdf = np.arange(1, len(data_sorted) + 1) / len(data_sorted)
+    ax_orient[0].plot(data_sorted, cdf, label="SLAM source Yaw error rate ")
+
+    data_sorted = np.sort(angle_diff_computed_slam_and_gt_slam[:,1])
+    cdf = np.arange(1, len(data_sorted) + 1) / len(data_sorted)
+    ax_orient[1].plot(data_sorted, cdf, label="SLAM source Pitch error rate")
+
+    data_sorted = np.sort(angle_diff_computed_slam_and_gt_slam[:,2])
+    cdf = np.arange(1, len(data_sorted) + 1) / len(data_sorted)
+    ax_orient[2].plot(data_sorted, cdf, label="SLAM source Roll error rate")
     
     data_sorted = np.sort(pose_diff_computed_slam_and_gt_slam)
     cdf = np.arange(1, len(data_sorted) + 1) / len(data_sorted)
     ax_pos.plot(data_sorted, cdf, label="SLAM source error rate")
 
-    # data_sorted = np.sort(angle_diff_computed_slam_and_gt_slam)
-    # cdf = np.arange(1, len(data_sorted) + 1) / len(data_sorted)
-    # ax_orient.plot(data_sorted, cdf, label="SLAM source error rate")
-
     ax_pos.legend()
-    ax_orient.legend()
+    ax_orient[0].legend()
+    ax_orient[1].legend()
+    ax_orient[2].legend()
 
     fig_pos.savefig("res_act_position.png")
     fig_orient.savefig("res_act_orient.png")
@@ -649,6 +689,19 @@ def train_bc(train_dataloader, val_dataloader, config):
     ckpt_path = os.path.join(ckpt_dir, f'policy_last.ckpt')
     torch.save(policy.state_dict(), ckpt_path)
 
+        
+
+    pt_path = os.path.join(ckpt_dir, f'policy_last.pt')
+    
+    m = torch.jit.script(policy)
+    torch.jit.save(m, pt_path)
+
+    # Save with extra files
+    extra_files = {'foo.txt': b'bar'}
+    torch.jit.save(m, 'scriptmodule.pt', _extra_files=extra_files)
+    print("Finished pt packet saving")
+
+
     best_epoch, min_val_loss, best_state_dict = best_ckpt_info
     ckpt_path = os.path.join(ckpt_dir, f'policy_epoch_{best_epoch}_seed_{seed}.ckpt')
     torch.save(best_state_dict, ckpt_path)
@@ -678,6 +731,7 @@ def plot_history(train_history, validation_history, num_epochs, ckpt_dir, seed):
 
 
 if __name__ == '__main__':
+    generateTrainIndex()
     parser = argparse.ArgumentParser()
     parser.add_argument('--eval', action='store_true')
     parser.add_argument('--onscreen_render', action='store_true')
@@ -698,4 +752,5 @@ if __name__ == '__main__':
     
     main(vars(parser.parse_args()))
 
-    compute_result_from_file(vars(parser.parse_args()))
+    # compute_result_from_file(vars(parser.parse_args()))
+    # compute_result_from_euler_file(vars(parser.parse_args()))
