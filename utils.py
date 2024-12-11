@@ -15,8 +15,10 @@ import cv2
 
 
 # Source of the profile result folder, currently have euler format and quat format
-INPUT_DIM = 6
-PROFILE_RESULT_FOLDER = PROFILE_RESULT_EULER_FOLDER
+# INPUT_DIM = 3 + 2 * 3
+# PROFILE_RESULT_FOLDER = PROFILE_RESULT_EULER_SIN_FOLDER
+INPUT_DIM = 7
+PROFILE_RESULT_FOLDER = PROFILE_RESULT_QUAT_FOLDER
 
 class EpisodicDataset(torch.utils.data.Dataset):
     def __init__(self, episode_ids, dataset_dir, camera_names, norm_stats):

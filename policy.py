@@ -11,6 +11,33 @@ from detr.main import build_ACT_model_and_optimizer, build_CNNMLP_model_and_opti
 import IPython
 e = IPython.embed
 
+def custom_loss(y_pred, y_true):
+
+    # Example: Mean Absolute Error (MAE)
+
+    penalty = torch.sum((y_pred[:,3] < -1).float()) + torch.sum((y_pred[:,3] > 1).float())
+    penalty += torch.sum((y_pred[:,4] < -1).float()) + torch.sum((y_pred[:,4] > 1).float())
+    penalty += torch.sum((y_pred[:,5] < -1).float()) + torch.sum((y_pred[:,5] > 1).float())
+    # print("penalty: ", penalty)
+
+    loss = torch.mean(torch.abs(y_pred[:,0] - y_true[:,0]))
+    # print(y_pred, y_true)
+    loss += torch.mean(torch.abs(y_pred[:,1] - y_true[:,1]))
+    loss += torch.mean(torch.abs(y_pred[:,2] - y_true[:,2]))
+    loss += torch.mean(torch.abs((y_pred[:,3] - y_true[:,3] + 1) % 2 -1))
+    loss += torch.mean(torch.abs((y_pred[:,4] - y_true[:,4] + 1) % 2 -1))
+    loss += torch.mean(torch.abs((y_pred[:,5] - y_true[:,5] + 1) % 2 -1))
+
+    loss = loss / 6.0
+    return loss + penalty / 20.0
+    # return loss + penalty
+
+def custom_loss_quat(y_pred, y_true):
+    loss_pose = F.mse_loss(y_pred[:,:3], y_true[:, :3])
+    loss_quat = F.mse_loss(y_pred[:,3:7], y_true[:, 3:7])
+    beta = 10
+    return loss_pose + beta * loss_quat
+
 
 
 class ACTPolicy(nn.Module):
@@ -34,8 +61,8 @@ class ACTPolicy(nn.Module):
             a_hat, is_pad_hat, (mu, logvar) = self.model(qpos, image, env_state, actions, is_pad)
             total_kld, dim_wise_kld, mean_kld = kl_divergence(mu, logvar)
             loss_dict = dict()
-            all_l1 = F.l1_loss(actions, a_hat, reduction='none')
-            
+            # all_l1 = F.l1_loss(actions, a_hat, reduction='none')
+            all_l1 = custom_loss_quat(actions, a_hat)
             # pose_diff, angle_diff = computePoseDiffFromNumpy(actions.cpu().detach().numpy()[0], 
             #                                                  a_hat.cpu().detach().numpy()[0])
             # poseLoss = CustomLoss()
@@ -120,7 +147,8 @@ class SimplePolicy(nn.Module):
             a_hat, is_pad_hat, (mu, logvar) = self.model(qpos, actions, is_pad)
             total_kld, dim_wise_kld, mean_kld = kl_divergence(mu, logvar)
             loss_dict = dict()
-            all_l1 = F.l1_loss(actions, a_hat, reduction='none')
+            # all_l1 = F.l1_loss(actions, a_hat, reduction='none')
+            all_l1 = custom_loss_quat(actions, a_hat)
             
             # print("a_hat:", a_hat)
             # hat, _, _  = self.model(qpos)

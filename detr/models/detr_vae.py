@@ -181,6 +181,33 @@ class DETRVAE(nn.Module):
             hs = self.transformer(transformer_input, None, self.query_embed.weight, self.pos.weight)[0]
         a_hat = self.action_head(hs)
         is_pad_hat = self.is_pad_head(hs)
+
+        
+
+        if INPUT_DIM == 7:
+            # noramlize the quat results
+            norm = torch.sqrt(a_hat[:,:, 3]**2 + a_hat[:,:, 4]**2 + a_hat[:,:, 5]**2 + a_hat[:,:, 6]**2)
+            tmp = a_hat[:,:,3:7] / norm.unsqueeze(2)
+            # print(a_hat[:,:,:3].shape, tmp.shape)
+            # print(tmp[0])
+            a_hat = torch.cat([a_hat[:,:,:3], tmp], axis = 2)
+        elif INPUT_DIM == 9:
+
+            norm_yaw = torch.sqrt(a_hat[:,:, 3]**2 + a_hat[:,:, 4]**2)
+            norm_pitch = torch.sqrt(a_hat[:,:, 5]**2 + a_hat[:,:, 6]**2)
+            norm_roll = torch.sqrt(a_hat[:,:, 7]**2 + a_hat[:,:, 8]**2)
+
+            yaw = a_hat[:,:,3:5] / norm_yaw.unsqueeze(2)
+            pitch = a_hat[:,:,5:7] / norm_pitch.unsqueeze(2)
+            roll = a_hat[:,:,7:9] / norm_roll.unsqueeze(2)
+
+            a_hat = torch.cat([a_hat[:,:,:3], yaw, pitch, roll], axis = 2)
+
+
+        # elif INPUT_DIM == 6: 
+        #     a_hat[:, 3] = 2 * torch.sigmoid(a_hat[:, 3]) - 1
+        #     a_hat[:, 4] = 2 * torch.sigmoid(a_hat[:, 4]) - 1
+        #     a_hat[:, 5] = 2 * torch.sigmoid(a_hat[:, 5]) - 1
         return a_hat, is_pad_hat, [mu, logvar]
 
 

@@ -82,16 +82,16 @@ class SimpleTransformer(nn.Module):
             action_embed = self.encoder_action_proj(actions) # (bs, seq, hidden_dim)
             
             qpos_embed = self.encoder_joint_proj(qpos)  # (bs, hidden_dim)
-            qpos_embed = torch.unsqueeze(qpos_embed, axis=1)  # (bs, 1, hidden_dim)
+            qpos_embed = torch.unsqueeze(qpos_embed, dim=1)  # (bs, 1, hidden_dim)
             cls_embed = self.cls_embed.weight # (1, hidden_dim)
-            cls_embed = torch.unsqueeze(cls_embed, axis=0).repeat(bs, 1, 1) # (bs, 1, hidden_dim)
-            encoder_input = torch.cat([cls_embed, qpos_embed, action_embed], axis=1) # (bs, seq+1, hidden_dim)
+            cls_embed = torch.unsqueeze(cls_embed, dim=0).repeat(bs, 1, 1) # (bs, 1, hidden_dim)
+            encoder_input = torch.cat([cls_embed, qpos_embed, action_embed], dim=1) # (bs, seq+1, hidden_dim)
 
             encoder_input = encoder_input.permute(1, 0, 2) # (seq+1, bs, hidden_dim)
             
             # do not mask cls token
             cls_joint_is_pad = torch.full((bs, 2), False).to(qpos.device) # False: not a padding
-            is_pad = torch.cat([cls_joint_is_pad, is_pad], axis=1)  # (bs, seq+1)
+            is_pad = torch.cat([cls_joint_is_pad, is_pad], dim=1)  # (bs, seq+1)
             # obtain position embedding
             pos_embed = self.pos_table.clone().detach()
             pos_embed = pos_embed.permute(1, 0, 2)  # (seq+1, 1, hidden_dim)
@@ -107,11 +107,31 @@ class SimpleTransformer(nn.Module):
             mu = logvar = None
         
         qpos = self.input_proj_robot_state(qpos)
-        qpos = torch.unsqueeze(qpos, axis=1)  # (bs, 1, hidden_dim)
+        qpos = torch.unsqueeze(qpos, dim=1)  # (bs, 1, hidden_dim)
         
         # env_state = self.input_proj_env_state(env_state)
-        transformer_input = torch.cat([qpos], axis=1) # seq length = 1
-        hs = self.transformer(transformer_input, None, self.query_embed.weight, self.pos.weight)[0]
+        transformer_input = torch.cat([qpos], dim=1) # seq length = 1
+        hs = self.transformer(transformer_input, None, self.query_embed.weight, self.pos.weight, None, None, None, None)[0]
         a_hat = self.action_head(hs)
         is_pad_hat = self.is_pad_head(hs)
+
+        if INPUT_DIM == 7:
+            # noramlize the quat results
+            norm = torch.sqrt(a_hat[:,:, 3]**2 + a_hat[:,:, 4]**2 + a_hat[:,:, 5]**2 + a_hat[:,:, 6]**2)
+            
+            tmp = a_hat[:,:,3:7] / norm.unsqueeze(2)
+            # print(a_hat[:,:,:3].shape, tmp.shape)
+            # print(tmp[0])
+            a_hat = torch.cat([a_hat[:,:,:3], tmp], axis = 2)
+            # print( a_hat[:,:,3:7][0])
+            # print("-----")
+
+        # elif INPUT_DIM == 6: 
+        #     # a_hat[:, 3] = 2 * torch.sigmoid(a_hat[:, 3]) - 1
+        #     # a_hat[:, 4] = 2 * torch.sigmoid(a_hat[:, 4]) - 1
+        #     # a_hat[:, 5] = 2 * torch.sigmoid(a_hat[:, 5]) - 1
+        #     a_hat[:, 3] = torch.tanh(a_hat[:, 3])
+        #     a_hat[:, 4] = torch.tanh(a_hat[:, 4])
+        #     a_hat[:, 5] = torch.tanh(a_hat[:, 5])
+
         return a_hat, is_pad_hat, [mu, logvar]

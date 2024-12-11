@@ -134,7 +134,8 @@ def main(args):
         # for ckpt_name, success_rate, avg_return in results:
         #     print(f'{ckpt_name}: {success_rate=} {avg_return=}')
         print()
-        exit()
+        # exit()
+        return
     # train_dataloader, val_dataloader, stats, _ = load_data(dataset_dir, num_episodes, camera_names, batch_size_train, batch_size_val)
 
     # # save dataset stats
@@ -210,7 +211,8 @@ def eval_bc_euroc(config, ckpt_name):
     camera_names = config['camera_names']
     max_timesteps = config['episode_len']
     task_name = config['task_name']
-    temporal_agg = config['temporal_agg']
+    # temporal_agg = config['temporal_agg']
+    temporal_agg = False
     onscreen_cam = 'angle'
 
     # load policy and stats
@@ -232,6 +234,7 @@ def eval_bc_euroc(config, ckpt_name):
 
     num_queries = policy_config['num_queries']
 
+    all_time_actions = torch.zeros([num_queries, num_queries, state_dim]).cpu()
 
     with torch.inference_mode():
         
@@ -243,16 +246,16 @@ def eval_bc_euroc(config, ckpt_name):
         
         action_windows = [[] for _ in range(len(prediction_window))]
 
-        batch_size = 1
+        batch_size = 20
 
         if policy_class == 'SIMPLE':
             begin_idx = 30
         else:
             begin_idx = 0
-        print(gt_length)
+        print(gt_length // 2)
 
         for t in range(begin_idx, gt_length // 2, batch_size):
-        # for t in range(begin_idx, 1000, batch_size):
+        # for t in range(begin_idx, 102, batch_size):
             print(t)
             
             if policy_class == 'SIMPLE':
@@ -271,17 +274,64 @@ def eval_bc_euroc(config, ckpt_name):
                 time_end = time.time_ns()
                 print("Inference time:", (time_end - time_begin) / 1000000, " ms")
             
-            # We aim at the target of different prediction window
-            for i, window in enumerate(prediction_window):
-                raw_action = all_actions[:, window].squeeze(0).cpu().numpy()
-                # print(raw_action.shape)
-                action_windows[i].extend(raw_action)
-                # print(action_windows[i])
+            print(all_actions.shape)
+            if not temporal_agg: 
+                # We aim at the target of different prediction window
+                for i, window in enumerate(prediction_window):
+                    raw_action = all_actions[:, window].squeeze(0).cpu().numpy()
+                    # print(raw_action.shape)
+                    action_windows[i].extend(raw_action)
+                    # print(action_windows[i])
+            else:
+                
+                for i, window in enumerate(prediction_window):
+                    # Current we are targeting at prediction for t + window
+                    # So we can at most use [t + window - num_queries] for doing prediction
+                    print(all_time_actions.shape)
+                    all_time_actions = all_time_actions[1:]
+
+                    all_time_actions = torch.cat([all_time_actions, all_actions.cpu()], axis = 0)
+                    print(all_time_actions.shape)
+
+                    index = window
+                    actions_for_curr_step = np.asarray([all_time_actions[len(all_time_actions)-1][index].numpy()])
+                    print(actions_for_curr_step.shape)
+                    
+                    for j in range(len(all_time_actions)-2,-1,-1):
+                        if index == 100 or all_time_actions[j][index][0] == 0.000 :
+                            break
+                        actions_for_curr_step = np.concatenate([actions_for_curr_step, [all_time_actions[j][index].numpy()]], axis = 0)
+                        index += 1
+                    
+                    print(actions_for_curr_step.shape)
+                    
+                    k = 0.01
+                    exp_weights = np.exp(-k * np.arange(len(actions_for_curr_step))).reshape((len(actions_for_curr_step), 1))
+                    print(exp_weights)
+                    exp_weights = exp_weights / exp_weights.sum()
+                    # exp_weights = torch.from_numpy(exp_weights).cuda().unsqueeze(dim=1)
+                    raw_action = (actions_for_curr_step * exp_weights).sum(axis=0)
+                    # print("raw_action:", raw_action)
+               
+                    # action = raw_action[:, window].squeeze(0).cpu().numpy()
+                    action_windows[i].append(raw_action)
+
+                
         # Dump the current result 
+        prefix = config['ckpt_dir']
+        print("prefix: ", prefix)
+
+        if INPUT_DIM == 6:
+            header = "x, y, z, y, p, r\n"
+        elif INPUT_DIM == 7:
+            header = "x, y, z, w, x, y, z\n"
+        else:
+            header = "x, y, z, ysin, ycos, psin, pcos, rsin, rcos\n"
+            
 
         for window, action_window in zip(prediction_window, action_windows):
-            with open("res_" + str(window) + ".csv", "w") as res:
-                res.write("x, y, z, w, x, y, z\n")
+            with open(prefix + '/' + "res_" + str(window) + ".csv", "w") as res:
+                res.write(header)
                 # res.write("x, y, z, yaw, pitch, row")
                 csv_writer = csv.writer(res)
                 try:
@@ -313,71 +363,6 @@ def eval_bc_euroc(config, ckpt_name):
         fig.savefig("res_act.png")
 
 
-
-def compute_result_from_file(args):
-
-    policy_class = args['policy_class']
-
-    # Read the groundtruth
-    dataset = load_test_euroc(TEST_IDX, policy_class)
-    groundtruth = dataset.getGroundtruth()
-    slam_output = dataset.getSlamSource()
-
-    fig_pos, ax_pos = plt.subplots()
-    fig_orient, ax_orient = plt.subplots()
-
-    action_len = len(groundtruth)
-
-    prefix = args['ckpt_dir']
-    # prefix=""
-
-    for window in prediction_window:
-        actions = pd.read_csv(prefix + "res_" + str(window) + ".csv").to_numpy()
-        print(len(actions))
-
-        action_len = min(len(actions), action_len)
-
-        if (window == 0):
-            pose_diff_list, angle_diff_list = computePoseDiffFromNumpy(actions, groundtruth[:len(actions)])
-        else:
-            pose_diff_list, angle_diff_list = computePoseDiffFromNumpy(actions[:-window], groundtruth[window:len(actions)])
-
-        print("windows size:", window)
-        print("Action len:", action_len)
-        print(np.average(pose_diff_list), np.average(angle_diff_list))
-        
-
-        data_sorted = np.sort(pose_diff_list)
-        cdf = np.arange(1, len(data_sorted) + 1) / len(data_sorted)
-        ax_pos.plot(data_sorted, cdf, label="Phase2 error rate with window " + str(window))
-
-        data_sorted = np.sort(angle_diff_list)
-        cdf = np.arange(1, len(data_sorted) + 1) / len(data_sorted)
-        ax_orient.plot(data_sorted, cdf, label="Phase2 error rate with window " + str(window))
-
-    pose_diff_computed_slam_and_gt_slam, \
-    angle_diff_computed_slam_and_gt_slam = computePoseDiffFromNumpy(slam_output[:action_len], groundtruth[:action_len])
-    
-    print("SLAM source average error:", 
-          np.average(pose_diff_computed_slam_and_gt_slam),
-          np.average(angle_diff_computed_slam_and_gt_slam))
-    
-    data_sorted = np.sort(pose_diff_computed_slam_and_gt_slam)
-    cdf = np.arange(1, len(data_sorted) + 1) / len(data_sorted)
-    ax_pos.plot(data_sorted, cdf, label="SLAM source error rate")
-
-    data_sorted = np.sort(angle_diff_computed_slam_and_gt_slam)
-    cdf = np.arange(1, len(data_sorted) + 1) / len(data_sorted)
-    ax_orient.plot(data_sorted, cdf, label="SLAM source error rate")
-
-    ax_pos.legend()
-    ax_orient.legend()
-
-    fig_pos.savefig("res_act_position.png")
-    fig_orient.savefig("res_act_orient.png")
-    # Add LSTM for comparison
-
-
 def compute_result_from_euler_file(args):
 
     policy_class = args['policy_class']
@@ -390,31 +375,29 @@ def compute_result_from_euler_file(args):
     fig_pos, ax_pos = plt.subplots()
     fig_orient, ax_orient = plt.subplots(3)
     
-    # prefix = "/media/wuhaolu/c54fff3f-cab5-4dcf-94c3-c83855e5a9bd/ACT_Result/full/"
-    # prefix =""
     prefix = args['ckpt_dir'] + '/'
+    print(prefix)
 
     for window in prediction_window:
         actions = pd.read_csv(prefix + "res_" + str(window) + ".csv").to_numpy()[:,:6]
-        print(len(actions))
+        print("actions: ", len(actions))
 
-        if (window == 0):
-            actions = actions
-            groundtruth = groundtruth[:len(actions)]
-        else:
-            actions = actions[:-window]
-            groundtruth = groundtruth[:len(actions)]
+        groundtruth = groundtruth[window: min(len(actions) + window, len(groundtruth))]
+        actions = actions[:len(groundtruth)]
+
+        print(groundtruth[len(groundtruth)//2 -2 ])
+        print(actions[len(groundtruth)//2 - 2])
 
         print(actions.shape, groundtruth.shape)
-        pose_diff_list = [np.linalg.norm(action[:3] - groundtruth[:3]) for action, groundtruth in zip(actions, groundtruth)]
-        yaw_list = np.abs(actions[:,3] - groundtruth[:, 3]) * 180.0
-        pitch_list = np.abs(actions[:, 4] - groundtruth[:, 4]) * 90.0
-        roll_list = np.abs(actions[:, 5] - groundtruth[:, 5]) * 180.0
+        pose_diff_list, angle_diff_list = computePoseDiffFromNumpy(actions, groundtruth)
+
+        yaw_list = angle_diff_list[:, 0]
+        pitch_list = angle_diff_list[:, 1]
+        roll_list = angle_diff_list[:, 2]
 
         print("windows size:", window)
         print(np.average(pose_diff_list), np.average(yaw_list), np.average(pitch_list), np.average(roll_list))
         
-
         data_sorted = np.sort(pose_diff_list)
         cdf = np.arange(1, len(data_sorted) + 1) / len(data_sorted)
         ax_pos.plot(data_sorted, cdf, label="Phase2 error rate with window " + str(window))
@@ -432,7 +415,7 @@ def compute_result_from_euler_file(args):
         ax_orient[2].plot(data_sorted, cdf, label="Roll error rate with window " + str(window))
 
     pose_diff_computed_slam_and_gt_slam, \
-    angle_diff_computed_slam_and_gt_slam = computePoseDiffFromNumpy(slam_output, groundtruth)
+    angle_diff_computed_slam_and_gt_slam = computePoseDiffFromNumpy(slam_output, dataset.getGroundtruth())
 
     print("SLAM source average error:", 
           np.average(pose_diff_computed_slam_and_gt_slam),
@@ -689,17 +672,7 @@ def train_bc(train_dataloader, val_dataloader, config):
     ckpt_path = os.path.join(ckpt_dir, f'policy_last.ckpt')
     torch.save(policy.state_dict(), ckpt_path)
 
-        
 
-    pt_path = os.path.join(ckpt_dir, f'policy_last.pt')
-    
-    m = torch.jit.script(policy)
-    torch.jit.save(m, pt_path)
-
-    # Save with extra files
-    extra_files = {'foo.txt': b'bar'}
-    torch.jit.save(m, 'scriptmodule.pt', _extra_files=extra_files)
-    print("Finished pt packet saving")
 
 
     best_epoch, min_val_loss, best_state_dict = best_ckpt_info
@@ -752,5 +725,4 @@ if __name__ == '__main__':
     
     main(vars(parser.parse_args()))
 
-    # compute_result_from_file(vars(parser.parse_args()))
-    # compute_result_from_euler_file(vars(parser.parse_args()))
+    compute_result_from_euler_file(vars(parser.parse_args()))
