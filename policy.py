@@ -35,8 +35,7 @@ def custom_loss(y_pred, y_true):
 def custom_loss_quat(y_pred, y_true):
     loss_pose = F.mse_loss(y_pred[:,:3], y_true[:, :3])
     loss_quat = F.mse_loss(y_pred[:,3:7], y_true[:, 3:7])
-    beta = 10
-    return loss_pose + beta * loss_quat
+    return loss_pose + BETA * loss_quat
 
 
 
@@ -51,9 +50,11 @@ class ACTPolicy(nn.Module):
 
     def __call__(self, qpos, image, actions=None, is_pad=None):
         env_state = None
-        normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                         std=[0.229, 0.224, 0.225])
-        image = normalize(image)
+        # print("input image:", image.ndimension())
+        if image.ndimension() > 1:
+            normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                            std=[0.229, 0.224, 0.225])
+            image = normalize(image)
         if actions is not None: # training time
             actions = actions[:, :self.model.num_queries]
             is_pad = is_pad[:, :self.model.num_queries]
@@ -61,8 +62,13 @@ class ACTPolicy(nn.Module):
             a_hat, is_pad_hat, (mu, logvar) = self.model(qpos, image, env_state, actions, is_pad)
             total_kld, dim_wise_kld, mean_kld = kl_divergence(mu, logvar)
             loss_dict = dict()
+
+            # TODO: Change this loss function 
             # all_l1 = F.l1_loss(actions, a_hat, reduction='none')
             all_l1 = custom_loss_quat(actions, a_hat)
+
+            # all_l1 = custom_loss(actions, a_hat)
+
             # pose_diff, angle_diff = computePoseDiffFromNumpy(actions.cpu().detach().numpy()[0], 
             #                                                  a_hat.cpu().detach().numpy()[0])
             # poseLoss = CustomLoss()

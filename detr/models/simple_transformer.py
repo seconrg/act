@@ -15,7 +15,8 @@ e = IPython.embed
 
 import sys
 sys.path.append('/home/wuhaolu/Documents/pose_prediction/')
-from act.utils import INPUT_DIM
+# from act.utils import DIM
+DIM = 7
 
 
 def reparametrize(mu, logvar):
@@ -49,19 +50,19 @@ class SimpleTransformer(nn.Module):
         self.is_pad_head = nn.Linear(hidden_dim, 1)
         self.query_embed = nn.Embedding(num_queries, hidden_dim)
         
-        history_state = 30
-        self.input_proj_robot_state = nn.Linear(INPUT_DIM * 2 * history_state, hidden_dim)
-        self.input_proj_slam = nn.Linear(INPUT_DIM, hidden_dim)
-        self.input_proj_phase1 = nn.Linear(INPUT_DIM, hidden_dim)
-        self.input_proj_env_state = nn.Linear(INPUT_DIM, hidden_dim)
+        history_state = 10
+        self.input_proj_robot_state = nn.Linear(DIM * 2 * history_state, hidden_dim)
+        self.input_proj_slam = nn.Linear(DIM, hidden_dim)
+        self.input_proj_phase1 = nn.Linear(DIM, hidden_dim)
+        self.input_proj_env_state = nn.Linear(DIM, hidden_dim)
         self.pos = torch.nn.Embedding(1, hidden_dim)
         self.backbones = None
         
         # encoder extra params
         self.latent_dim = 32
         self.cls_embed = nn.Embedding(1, hidden_dim)
-        self.encoder_action_proj = nn.Linear(INPUT_DIM, hidden_dim) # project action to embedding
-        self.encoder_joint_proj = nn.Linear(INPUT_DIM * 2 * history_state, hidden_dim)  # project qpos to embedding
+        self.encoder_action_proj = nn.Linear(DIM, hidden_dim) # project action to embedding
+        self.encoder_joint_proj = nn.Linear(DIM * 2 * history_state, hidden_dim)  # project qpos to embedding
         self.latent_proj = nn.Linear(hidden_dim, self.latent_dim*2) # project hidden state to latent std, var
         self.register_buffer('pos_table', get_sinusoid_encoding_table(1+1+num_queries, hidden_dim)) # [CLS], qpos, a_seq
 
@@ -115,7 +116,7 @@ class SimpleTransformer(nn.Module):
         a_hat = self.action_head(hs)
         is_pad_hat = self.is_pad_head(hs)
 
-        if INPUT_DIM == 7:
+        if DIM == 7:
             # noramlize the quat results
             norm = torch.sqrt(a_hat[:,:, 3]**2 + a_hat[:,:, 4]**2 + a_hat[:,:, 5]**2 + a_hat[:,:, 6]**2)
             
@@ -126,7 +127,7 @@ class SimpleTransformer(nn.Module):
             # print( a_hat[:,:,3:7][0])
             # print("-----")
 
-        # elif INPUT_DIM == 6: 
+        # elif DIM == 6: 
         #     # a_hat[:, 3] = 2 * torch.sigmoid(a_hat[:, 3]) - 1
         #     # a_hat[:, 4] = 2 * torch.sigmoid(a_hat[:, 4]) - 1
         #     # a_hat[:, 5] = 2 * torch.sigmoid(a_hat[:, 5]) - 1

@@ -11,7 +11,6 @@ from .simple_transformer import *
 
 import sys
 sys.path.append('/home/wuhaolu/Documents/pose_prediction/')
-from act.utils import INPUT_DIM
 
 import numpy as np
 
@@ -50,7 +49,7 @@ class DETRVAE(nn.Module):
         """
         super().__init__()
         # dim for each poses, 7 if using quat orient, 6 if using euler
-        self.pos_dim = INPUT_DIM
+        self.pos_dim = DIM
         self.num_qpos = 2
 
         self.num_queries = num_queries
@@ -68,7 +67,7 @@ class DETRVAE(nn.Module):
             self.input_proj_slam = nn.Linear(self.pos_dim, hidden_dim)
             self.input_proj_phase1 = nn.Linear(self.pos_dim, hidden_dim)
         else:
-            # input_dim = 14 + 7 # robot_state + env_state
+            # dimension = DIM *2 + DIM # robot_state + env_state
             self.input_proj_robot_state = nn.Linear(self.pos_dim * 2, hidden_dim)
             self.input_proj_slam = nn.Linear(self.pos_dim, hidden_dim)
             self.input_proj_phase1 = nn.Linear(self.pos_dim, hidden_dim)
@@ -90,6 +89,9 @@ class DETRVAE(nn.Module):
         # decoder extra parameters
         self.latent_out_proj = nn.Linear(self.latent_dim, hidden_dim) # project latent sample to embedding
         self.additional_pos_embed = nn.Embedding(1 + self.num_qpos, hidden_dim) # learned position embedding for proprio and latent
+        
+        # Cache the previous backbone result
+        self.prev_backbone_result = [None for _ in range(len(camera_names))]
 
     def forward(self, qpos, image, env_state, actions=None, is_pad=None):
         """
@@ -146,7 +148,20 @@ class DETRVAE(nn.Module):
             all_cam_features = []
             all_cam_pos = []
             for cam_id, cam_name in enumerate(self.camera_names):
-                features, pos = self.backbones[0](image[:, cam_id]) # HARDCODED
+                
+                '''Use cached information to skip backbone computation'''
+                if image.ndimension() > 1:
+                    print("Using backbone, ", image.ndimension())
+                    features, pos = self.backbones[0](image[:, cam_id]) # HARDCODED
+                    # Cache up the features and pos 
+                    self.prev_backbone_result[cam_id] = (features, pos)
+                elif self.prev_backbone_result[cam_id] is not None:
+                    # We use the cached information
+                    print("Skip backbone")
+                    features, pos = self.prev_backbone_result[cam_id]
+                else:
+                    raise ValueError("Image is None and there is no cached information")
+
                 features = features[0] # take the last layer feature
                 pos = pos[0]
                 all_cam_features.append(self.input_proj(features))
@@ -184,14 +199,14 @@ class DETRVAE(nn.Module):
 
         
 
-        if INPUT_DIM == 7:
+        if DIM == 7:
             # noramlize the quat results
             norm = torch.sqrt(a_hat[:,:, 3]**2 + a_hat[:,:, 4]**2 + a_hat[:,:, 5]**2 + a_hat[:,:, 6]**2)
             tmp = a_hat[:,:,3:7] / norm.unsqueeze(2)
             # print(a_hat[:,:,:3].shape, tmp.shape)
             # print(tmp[0])
             a_hat = torch.cat([a_hat[:,:,:3], tmp], axis = 2)
-        elif INPUT_DIM == 9:
+        elif DIM == 9:
 
             norm_yaw = torch.sqrt(a_hat[:,:, 3]**2 + a_hat[:,:, 4]**2)
             norm_pitch = torch.sqrt(a_hat[:,:, 5]**2 + a_hat[:,:, 6]**2)
@@ -204,7 +219,7 @@ class DETRVAE(nn.Module):
             a_hat = torch.cat([a_hat[:,:,:3], yaw, pitch, roll], axis = 2)
 
 
-        # elif INPUT_DIM == 6: 
+        # elif DIM == 6: 
         #     a_hat[:, 3] = 2 * torch.sigmoid(a_hat[:, 3]) - 1
         #     a_hat[:, 4] = 2 * torch.sigmoid(a_hat[:, 4]) - 1
         #     a_hat[:, 5] = 2 * torch.sigmoid(a_hat[:, 5]) - 1
@@ -239,9 +254,9 @@ class CNNMLP(nn.Module):
                 backbone_down_projs.append(down_proj)
             self.backbone_down_projs = nn.ModuleList(backbone_down_projs)
 
-            mlp_in_dim = 10368 * len(backbones) + INPUT_DIM * 2
+            mlp_in_dim = 10368 * len(backbones) + DIM * 2
             print("create info: ", len(backbones), mlp_in_dim)
-            self.mlp = mlp(input_dim=mlp_in_dim, hidden_dim=1024, output_dim=INPUT_DIM * self.num_queries, hidden_depth=2)
+            self.mlp = mlp(DIM=mlp_in_dim, hidden_dim=1024, output_dim=DIM * self.num_queries, hidden_depth=2)
         else:
             raise NotImplementedError
 
@@ -273,11 +288,11 @@ class CNNMLP(nn.Module):
         return a_hat
 
 
-def mlp(input_dim, hidden_dim, output_dim, hidden_depth):
+def mlp(DIM, hidden_dim, output_dim, hidden_depth):
     if hidden_depth == 0:
-        mods = [nn.Linear(input_dim, output_dim)]
+        mods = [nn.Linear(DIM, output_dim)]
     else:
-        mods = [nn.Linear(input_dim, hidden_dim), nn.ReLU(inplace=True)]
+        mods = [nn.Linear(DIM, hidden_dim), nn.ReLU(inplace=True)]
         for i in range(hidden_depth - 1):
             mods += [nn.Linear(hidden_dim, hidden_dim), nn.ReLU(inplace=True)]
         mods.append(nn.Linear(hidden_dim, output_dim))
@@ -303,7 +318,7 @@ def build_encoder(args):
 
 
 def build(args):
-    state_dim = INPUT_DIM #TODO hardcode
+    state_dim = DIM #TODO hardcode
 
     # From state
     # backbone = None # from state for now, no need for conv nets
@@ -331,7 +346,7 @@ def build(args):
     return model
 
 def build_cnnmlp(args):
-    state_dim = INPUT_DIM #TODO hardcode
+    state_dim = DIM #TODO hardcode
 
     # From state
     # backbone = None # from state for now, no need for conv nets
@@ -354,7 +369,7 @@ def build_cnnmlp(args):
     return model
 
 def build_simple_transformer(args):
-    state_dim = INPUT_DIM #TODO hardcode
+    state_dim = DIM #TODO hardcode
 
     transformer = build_transformer(args)
     encoder = build_encoder(args)

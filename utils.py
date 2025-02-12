@@ -7,7 +7,7 @@ from torch.utils.data import TensorDataset, DataLoader
 
 import sys
 sys.path.append('/home/wuhaolu/Documents/pose_prediction/')
-from utils import * 
+# from utils import * 
 from PosePrediction.utils import *
 
 import pandas as pd
@@ -15,10 +15,19 @@ import cv2
 
 
 # Source of the profile result folder, currently have euler format and quat format
-# INPUT_DIM = 3 + 2 * 3
-# PROFILE_RESULT_FOLDER = PROFILE_RESULT_EULER_SIN_FOLDER
-INPUT_DIM = 7
-PROFILE_RESULT_FOLDER = PROFILE_RESULT_QUAT_FOLDER
+
+prediction_window = [
+                    #  0, 
+                    #  1, 
+                    #  5,
+                     10, 
+                    #  17,
+                     18, 
+                    #  45, 
+                    #  90
+                     ]
+
+DIM = 7
 
 class EpisodicDataset(torch.utils.data.Dataset):
     def __init__(self, episode_ids, dataset_dir, camera_names, norm_stats):
@@ -138,6 +147,20 @@ class EuroCStyleDataset(torch.utils.data.Dataset):
         phase1_pose = observation_raw[:, INPUT_DIM+2:INPUT_DIM*2+2]
 
         # phase0_phase1_interval = observation_raw[:, 16:17]
+        '''Pre-process the data so that it contains only the delta of position shift'''
+        # Construct phase1 delta
+        phase1_pose = computePoseDiffFromNumpy6D(slam_pose[1:], phase1_pose[1:])
+        # Construct SLAM pose data
+        slam_pose0 = slam_pose[:-1]
+        slam_pose1 = slam_pose[1:]
+        slam_pose = computePoseDiffFromNumpy6D(slam_pose1, slam_pose0)
+
+        # Construct groundtruth data
+        groundtruth0 = groundtruth[:-1]
+        groundtruth1 = groundtruth[1:]
+        groundtruth = computePoseDiffFromNumpy6D(groundtruth1, groundtruth0)
+
+
 
         observation = np.hstack([slam_pose, phase1_pose])
         # observation = np.hstack([slam_pose, phase0_phase1_interval, phase1_pose])
@@ -158,13 +181,13 @@ class EuroCStyleDataset(torch.utils.data.Dataset):
         
         # For qos, we include the current slam observation & prediction
         qpos = observation[start_ts]
-        left_image = np.asarray(cv2.imread(camera_path[start_ts][1]))
-        right_image = np.asarray(cv2.imread(camera_path[start_ts][3]))
+        left_image = np.asarray(cv2.imread(camera_path[start_ts + 1][1]))
+        right_image = np.asarray(cv2.imread(camera_path[start_ts + 1][3]))
 
         # Load the image from information
         all_cam_images = [left_image, right_image]
         all_cam_images = np.stack(all_cam_images, axis=0)
-
+        
         # Construct action data
         # TODO: Check whether we also include the current action here
         action = groundtruth[start_ts:]
@@ -201,6 +224,20 @@ class EuroCStyleDataset(torch.utils.data.Dataset):
         # Get only the poses  
         slam_pose = observation_raw[:, 1:INPUT_DIM+1]
         phase1_pose = observation_raw[:, INPUT_DIM+2:INPUT_DIM*2+2]
+
+        # '''Pre-process the data so that it contains only the delta of position shift'''
+        # # Construct phase1 delta
+        # phase1_pose = computePoseDiffFromNumpy6D(slam_pose[1:], phase1_pose[1:])
+        # # Construct SLAM pose data
+        # slam_pose0 = slam_pose[:-1]
+        # slam_pose1 = slam_pose[1:]
+        # slam_pose = computePoseDiffFromNumpy6D(slam_pose1, slam_pose0)
+
+        # # Construct groundtruth data
+        # groundtruth0 = groundtruth[:-1]
+        # groundtruth1 = groundtruth[1:]
+        # groundtruth = computePoseDiffFromNumpy6D(groundtruth1, groundtruth0)
+
         observation = np.hstack([slam_pose, phase1_pose])
         
         camera_path = pd.read_csv(camera_path).to_numpy()
@@ -212,6 +249,20 @@ class EuroCStyleDataset(torch.utils.data.Dataset):
 
         for i in range(index, min(index + batch_size, len(observation))):
             qpos = np.asarray(observation[i])
+
+            # Check whether image is the same as the previous one
+            # if i > 0:
+            #     if camera_path[i][1] == camera_path[i-1][1]:
+            #         left_image = None
+            #         right_image = None
+            #         print("Same image for index: ", i)
+            #     else:
+            #         left_image = np.asarray(cv2.imread(camera_path[i][1]))
+            #         right_image = np.asarray(cv2.imread(camera_path[i][3]))
+            # else:
+            #     left_image = np.asarray(cv2.imread(camera_path[i][1]))
+            #     right_image = np.asarray(cv2.imread(camera_path[i][3]))
+            
             left_image = np.asarray(cv2.imread(camera_path[i][1]))
             right_image = np.asarray(cv2.imread(camera_path[i][3]))
 
@@ -219,12 +270,14 @@ class EuroCStyleDataset(torch.utils.data.Dataset):
             all_cam_images = [left_image, right_image]
             all_cam_images = np.stack(all_cam_images, axis=0)
 
-            image_data = torch.from_numpy(all_cam_images) / 255.0
-            # qpos_data = torch.from_numpy(qpos).float().cuda().unsqueeze(0)
             qpos_data = torch.from_numpy(qpos).float().cuda()
-
-            # image_data = torch.einsum('k h w c -> k c h w', image_data).cuda().unsqueeze(0)
-            image_data = torch.einsum('k h w c -> k c h w', image_data).cuda()
+            if left_image is not None: 
+                image_data = torch.from_numpy(all_cam_images) / 255.0
+                # image_data = torch.einsum('k h w c -> k c h w', image_data).cuda().unsqueeze(0)
+                image_data = torch.einsum('k h w c -> k c h w', image_data).cuda()
+                print("Image shape: ", image_data.shape)
+            else:
+                image_data = torch.tensor(float('nan')).cuda()
 
             res_image.append(image_data)
             res_qpos.append(qpos_data)
@@ -267,7 +320,7 @@ class EuroCStyleDatasetForSimpleTransformer(torch.utils.data.Dataset):
         self.id2gtpath = id2gtpath
         self.id2camerapaths = id2camera_paths
         self.is_sim = None
-        self.qpos_len = 30
+        self.qpos_len = 10
 
         self.episode_id = TEST_IDX
     
@@ -288,7 +341,22 @@ class EuroCStyleDatasetForSimpleTransformer(torch.utils.data.Dataset):
         observation_raw = pd.read_csv(observation_path).to_numpy()
         slam_pose = observation_raw[:, 1:INPUT_DIM +1]
         phase1_pose = observation_raw[:, INPUT_DIM+2:INPUT_DIM*2 + 2]
-        # Create padding f
+
+        groundtruth_raw = pd.read_csv(groundtruth_path).to_numpy()
+        groundtruth = groundtruth_raw[:, 1:]        
+
+        '''Pre-process the data so that it contains only the delta of position shift'''
+        # Construct phase1 delta
+        phase1_pose = computePoseDiffFromNumpy6D(slam_pose[1:], phase1_pose[1:])
+        # Construct SLAM pose data
+        slam_pose0 = slam_pose[:-1]
+        slam_pose1 = slam_pose[1:]
+        slam_pose = computePoseDiffFromNumpy6D(slam_pose1, slam_pose0)
+
+        # Construct groundtruth data
+        groundtruth0 = groundtruth[:-1]
+        groundtruth1 = groundtruth[1:]
+        groundtruth = computePoseDiffFromNumpy6D(groundtruth1, groundtruth0)
         
         observation = np.hstack([slam_pose, phase1_pose])
 
@@ -303,8 +371,7 @@ class EuroCStyleDatasetForSimpleTransformer(torch.utils.data.Dataset):
         qpos = observation[start_ts +1 - self.qpos_len :start_ts+1]
         qpos = np.reshape(qpos, -1)
         
-        groundtruth_raw = pd.read_csv(groundtruth_path).to_numpy()
-        groundtruth = groundtruth_raw[:, 1:]
+        
         action = groundtruth[start_ts:]
 
         original_action_shape = groundtruth.shape
@@ -422,14 +489,13 @@ def load_data_euroc(num_episodes, batch_size_train, batch_size_val, policy_class
     shuffled_indices = np.random.permutation(num_episodes)
     
     file_list = []
-    with open(PROFILE_RESULT_FOLDER + PROFILE_RESULT_FILE_LIST, 'r') as fd:
+    with open(ACT_PROFILE_RESULT_FOLDER + "/" + PROFILE_RESULT_FILE_LIST, 'r') as fd:
         line = fd.readline()
         line = fd.readline()
         while line:
             file_list.append(line.strip())
             line = fd.readline()
-    print(file_list)
-    print(len(file_list))
+    print("file list len:", len(file_list))
 
     print("shuffled indices: ",shuffled_indices)
 
@@ -439,9 +505,9 @@ def load_data_euroc(num_episodes, batch_size_train, batch_size_val, policy_class
     episodeid2imagepath = {}
 
     for i in range(len(file_list)):
-        episodeid2qposefile[i] = PROFILE_RESULT_FOLDER + file_list[i] + ALIGNED_POSE_SUFFIX
-        episodeid2gtfile[i] = PROFILE_RESULT_FOLDER + file_list[i] + GROUNDTRUTH_SUFFIX
-        episodeid2imagepath[i] = PROFILE_RESULT_FOLDER + file_list[i] + IMAGE_PATH_SUFFIX
+        episodeid2qposefile[i] = ACT_PROFILE_RESULT_FOLDER + "/" + file_list[i] + ALIGNED_POSE_SUFFIX
+        episodeid2gtfile[i] = ACT_PROFILE_RESULT_FOLDER + "/" + file_list[i] + GROUNDTRUTH_SUFFIX
+        episodeid2imagepath[i] = ACT_PROFILE_RESULT_FOLDER + "/" + file_list[i] + IMAGE_PATH_SUFFIX
     
     train_indices = shuffled_indices[:int(train_ratio * num_episodes)]
     val_indices = shuffled_indices[int(train_ratio * num_episodes):]
@@ -471,11 +537,11 @@ def load_test_euroc(i, policy_class):
     episodeid2gtfile = {}
     episodeid2imagepath = {}
 
-    print(PROFILE_RESULT_FOLDER + MSD_LIST[i])
+    print(ACT_PROFILE_RESULT_FOLDER + "/" + MSD_LIST[i])
 
-    episodeid2qposefile[i] = PROFILE_RESULT_FOLDER + MSD_LIST[i] + ALIGNED_POSE_SUFFIX
-    episodeid2gtfile[i] = PROFILE_RESULT_FOLDER + MSD_LIST[i] + GROUNDTRUTH_SUFFIX
-    episodeid2imagepath[i] = PROFILE_RESULT_FOLDER + MSD_LIST[i] + IMAGE_PATH_SUFFIX
+    episodeid2qposefile[i] = ACT_PROFILE_RESULT_FOLDER+ "/" + MSD_LIST[i] + ALIGNED_POSE_SUFFIX
+    episodeid2gtfile[i] = ACT_PROFILE_RESULT_FOLDER+ "/" + MSD_LIST[i] + GROUNDTRUTH_SUFFIX
+    episodeid2imagepath[i] = ACT_PROFILE_RESULT_FOLDER+ "/" + MSD_LIST[i] + IMAGE_PATH_SUFFIX
     
     if policy_class == 'SIMPLE':
         val_dataset = EuroCStyleDatasetForSimpleTransformer(

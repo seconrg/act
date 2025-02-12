@@ -8,6 +8,9 @@ from copy import deepcopy
 from tqdm import tqdm
 from einops import rearrange
 
+import sys
+sys.path.append('/home/wuhaolu/Documents/pose_prediction/act')
+
 from constants import DT
 from constants import PUPPET_GRIPPER_JOINT_OPEN
 from utils import load_data, load_data_euroc, load_test_euroc # data functions
@@ -20,7 +23,7 @@ import csv
 import time
 import pandas as pd
 
-import sys
+
 sys.path.append('/home/wuhaolu/Documents/pose_prediction/PosePrediction')
 from utils import * 
 from predictPoseAct import generateTrainIndex
@@ -30,12 +33,6 @@ from sim_env import BOX_POSE
 import IPython
 e = IPython.embed
 
-prediction_window = [0, 
-                     10, 
-                     18, 
-                    #  45, 
-                    #  90
-                     ]
 
 
 
@@ -65,7 +62,7 @@ def main(args):
     camera_names = task_config['camera_names']
 
     # fixed parameters
-    state_dim = INPUT_DIM
+    state_dim = DIM
     lr_backbone = 1e-5
     backbone = 'resnet18'
     if policy_class == 'ACT':
@@ -246,13 +243,17 @@ def eval_bc_euroc(config, ckpt_name):
         
         action_windows = [[] for _ in range(len(prediction_window))]
 
-        batch_size = 20
+        batch_size = 1
 
         if policy_class == 'SIMPLE':
-            begin_idx = 30
+            begin_idx = 10
         else:
             begin_idx = 0
         print(gt_length // 2)
+
+        inference_times = []
+
+        latest_act = None
 
         for t in range(begin_idx, gt_length // 2, batch_size):
         # for t in range(begin_idx, 102, batch_size):
@@ -264,26 +265,36 @@ def eval_bc_euroc(config, ckpt_name):
                 time_begin = time.time_ns()
                 all_actions = policy(qpos)
                 time_end = time.time_ns()
-                print("Inference time:", (time_end - time_begin) / 1000000, " ms")
+                print("Inference time:", (time_end - time_begin) / MS_TO_NS, " ms")
+
+                inference_times.append((time_end - time_begin) / MS_TO_NS)
             else:
 
                 image, qpos = dataset.getImagePoseAt(t, batch_size)
+                print("qpos shape is: ", qpos.shape)
+
+                # Replace qpos with the latest ACT output
+                if latest_act is not None:
+                   qpos = latest_act
                 
                 time_begin = time.time_ns()
                 all_actions = policy(qpos, image)
                 time_end = time.time_ns()
-                print("Inference time:", (time_end - time_begin) / 1000000, " ms")
+                print("Inference time:", (time_end - time_begin) / MS_TO_NS, " ms")
+
+                inference_times.append((time_end - time_begin) / MS_TO_NS)
             
-            print(all_actions.shape)
+            print("All actions shape: ", all_actions.shape)
             if not temporal_agg: 
                 # We aim at the target of different prediction window
                 for i, window in enumerate(prediction_window):
-                    raw_action = all_actions[:, window].squeeze(0).cpu().numpy()
-                    # print(raw_action.shape)
+                    raw_action = all_actions[:, window].squeeze(0).cpu().numpy().reshape(1, DIM)
+                    
                     action_windows[i].extend(raw_action)
-                    # print(action_windows[i])
-            else:
+
+                # We use the next episode's result as the slam input:
                 
+            else:
                 for i, window in enumerate(prediction_window):
                     # Current we are targeting at prediction for t + window
                     # So we can at most use [t + window - num_queries] for doing prediction
@@ -315,15 +326,32 @@ def eval_bc_euroc(config, ckpt_name):
                
                     # action = raw_action[:, window].squeeze(0).cpu().numpy()
                     action_windows[i].append(raw_action)
+            print("All actions shape afterwards: ", all_actions.shape)
+            # p1 = all_actions[:, 0].squeeze(0).cpu().numpy().reshape(1, DIM)
+            # p2 = all_actions[:, 1].squeeze(0).cpu().numpy().reshape(1, DIM)
 
+            # observation = torch.from_numpy(np.hstack([p1, p2])).float().cuda()
+            # latest_act = observation.squeeze(1)
+            # print("Latest act shape is: ", latest_act.shape)
+
+        print("Inference time:", np.average(inference_times), " ms")
+        average = np.average(inference_times)
+        short = []
+        long = []
+        for inference_time in inference_times:
+            if inference_time < average:
+                short.append(inference_time)
+            else:
+                long.append(inference_time)
+        print("seperate time:", np.average(short), np.average(long))
                 
         # Dump the current result 
         prefix = config['ckpt_dir']
         print("prefix: ", prefix)
 
-        if INPUT_DIM == 6:
+        if DIM == 6:
             header = "x, y, z, y, p, r\n"
-        elif INPUT_DIM == 7:
+        elif DIM == 7:
             header = "x, y, z, w, x, y, z\n"
         else:
             header = "x, y, z, ysin, ycos, psin, pcos, rsin, rcos\n"
@@ -342,8 +370,7 @@ def eval_bc_euroc(config, ckpt_name):
         # Compute the pose error rate
         for i, window in enumerate(prediction_window):
             raw_actions = action_windows[i]
-            print(raw_actions)
-            print(groundtruth)
+
             pose_diff_list, angle_diff_list = computePoseDiffFromNumpy(raw_actions[:-window], groundtruth[window:])
 
             data_sorted = np.sort(pose_diff_list)
@@ -378,25 +405,28 @@ def compute_result_from_euler_file(args):
     prefix = args['ckpt_dir'] + '/'
     print(prefix)
 
+    error_rate = []
+
     for window in prediction_window:
         actions = pd.read_csv(prefix + "res_" + str(window) + ".csv").to_numpy()[:,:6]
-        print("actions: ", len(actions))
+        print("actions length: ", len(actions))
+        print("groundtruth length: ", len(groundtruth))
 
-        groundtruth = groundtruth[window: min(len(actions) + window, len(groundtruth))]
-        actions = actions[:len(groundtruth)]
-
-        print(groundtruth[len(groundtruth)//2 -2 ])
-        print(actions[len(groundtruth)//2 - 2])
+        local_gt = groundtruth[window: min(len(actions) + window, len(groundtruth))]
+        actions = actions[:len(local_gt)]
 
         print(actions.shape, groundtruth.shape)
-        pose_diff_list, angle_diff_list = computePoseDiffFromNumpy(actions, groundtruth)
+        pose_diff_list, angle_diff_list = computePoseDiffFromNumpy(actions, local_gt)
 
+        # Compute the relative error rate
+
+        
         yaw_list = angle_diff_list[:, 0]
         pitch_list = angle_diff_list[:, 1]
         roll_list = angle_diff_list[:, 2]
 
         print("windows size:", window)
-        print(np.average(pose_diff_list), np.average(yaw_list), np.average(pitch_list), np.average(roll_list))
+        print(np.average(pose_diff_list, axis = 0), np.average(yaw_list), np.average(pitch_list), np.average(roll_list))
         
         data_sorted = np.sort(pose_diff_list)
         cdf = np.arange(1, len(data_sorted) + 1) / len(data_sorted)
@@ -414,11 +444,15 @@ def compute_result_from_euler_file(args):
         cdf = np.arange(1, len(data_sorted) + 1) / len(data_sorted)
         ax_orient[2].plot(data_sorted, cdf, label="Roll error rate with window " + str(window))
 
+        if window == 10:
+            error_rate = np.column_stack([pose_diff_list, yaw_list, pitch_list, roll_list])
+            print("return error rate shape is:", error_rate.shape)
+
     pose_diff_computed_slam_and_gt_slam, \
     angle_diff_computed_slam_and_gt_slam = computePoseDiffFromNumpy(slam_output, dataset.getGroundtruth())
 
     print("SLAM source average error:", 
-          np.average(pose_diff_computed_slam_and_gt_slam),
+          np.average(pose_diff_computed_slam_and_gt_slam, axis=0),
           np.average(angle_diff_computed_slam_and_gt_slam, axis=0))
 
     data_sorted = np.sort(angle_diff_computed_slam_and_gt_slam[:,0])
@@ -445,6 +479,8 @@ def compute_result_from_euler_file(args):
 
     fig_pos.savefig("res_act_position.png")
     fig_orient.savefig("res_act_orient.png")
+
+    return error_rate
 
 
 def eval_bc(config, ckpt_name, save_episode=True):
@@ -567,6 +603,9 @@ def eval_bc(config, ckpt_name, save_episode=True):
                 raw_action = raw_action.squeeze(0).cpu().numpy()
                 action = post_process(raw_action)
                 target_qpos = action
+
+                ### step the environment
+                ts = env.step(target_qpos)
 
                 ### for visualization
                 qpos_list.append(qpos_numpy)
