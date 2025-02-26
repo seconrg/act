@@ -148,19 +148,17 @@ class EuroCStyleDataset(torch.utils.data.Dataset):
 
         # phase0_phase1_interval = observation_raw[:, 16:17]
         '''Pre-process the data so that it contains only the delta of position shift'''
-        # Construct phase1 delta
-        phase1_pose = computePoseDiffFromNumpy6D(slam_pose[1:], phase1_pose[1:])
-        # Construct SLAM pose data
-        slam_pose0 = slam_pose[:-1]
-        slam_pose1 = slam_pose[1:]
-        slam_pose = computePoseDiffFromNumpy6D(slam_pose1, slam_pose0)
+        # # Construct phase1 delta
+        # phase1_pose = computePoseDiffFromNumpy6D(slam_pose[1:], phase1_pose[1:])
+        # # Construct SLAM pose data
+        # slam_pose0 = slam_pose[:-1]
+        # slam_pose1 = slam_pose[1:]
+        # slam_pose = computePoseDiffFromNumpy6D(slam_pose1, slam_pose0)
 
-        # Construct groundtruth data
-        groundtruth0 = groundtruth[:-1]
-        groundtruth1 = groundtruth[1:]
-        groundtruth = computePoseDiffFromNumpy6D(groundtruth1, groundtruth0)
-
-
+        # # Construct groundtruth data
+        # groundtruth0 = groundtruth[:-1]
+        # groundtruth1 = groundtruth[1:]
+        # groundtruth = computePoseDiffFromNumpy6D(groundtruth1, groundtruth0)
 
         observation = np.hstack([slam_pose, phase1_pose])
         # observation = np.hstack([slam_pose, phase0_phase1_interval, phase1_pose])

@@ -47,7 +47,7 @@ class Transformer(nn.Module):
                 nn.init.xavier_uniform_(p)
     
     # def forward(self, src, mask, query_embed, pos_embed, latent_input=None, proprio_input=None, additional_pos_embed=None):
-    def forward(self, src, mask, query_embed, pos_embed, latent_input=None, proprio_slam=None, proprio_phase1=None, num_qpos=1, additional_pos_embed=None):
+    def forward(self, src, mask: Optional[Tensor], query_embed, pos_embed, latent_input=None, proprio_slam=None, proprio_phase1=None, num_qpos: int =1, additional_pos_embed=None):
         # src is the image that has been fed into the result
         # TODO flatten only when input has H and W
         if len(src.shape) == 4: # has H and W

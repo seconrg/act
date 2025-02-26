@@ -51,7 +51,7 @@ class ACTPolicy(nn.Module):
     def __call__(self, qpos, image, actions=None, is_pad=None):
         env_state = None
         # print("input image:", image.ndimension())
-        if image.ndimension() > 1:
+        if image.dim() > 1:
             normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                             std=[0.229, 0.224, 0.225])
             image = normalize(image)
@@ -118,9 +118,9 @@ class CNNMLPPolicy(nn.Module):
 def kl_divergence(mu, logvar):
     batch_size = mu.size(0)
     assert batch_size != 0
-    if mu.data.ndimension() == 4:
+    if mu.data.dim() == 4:
         mu = mu.view(mu.size(0), mu.size(1))
-    if logvar.data.ndimension() == 4:
+    if logvar.data.dim() == 4:
         logvar = logvar.view(logvar.size(0), logvar.size(1))
 
     klds = -0.5 * (1 + logvar - mu.pow(2) - logvar.exp())

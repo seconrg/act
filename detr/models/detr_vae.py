@@ -20,7 +20,8 @@ e = IPython.embed
 
 def reparametrize(mu, logvar):
     std = logvar.div(2).exp()
-    eps = Variable(std.data.new(std.size()).normal_())
+    # eps = Variable(std.data.new(std.size()).normal_())
+    eps = torch.randn_like(std)
     return mu + std * eps
 
 
@@ -91,7 +92,7 @@ class DETRVAE(nn.Module):
         self.additional_pos_embed = nn.Embedding(1 + self.num_qpos, hidden_dim) # learned position embedding for proprio and latent
         
         # Cache the previous backbone result
-        self.prev_backbone_result = [None for _ in range(len(camera_names))]
+        # self.prev_backbone_result = [None for _ in range(len(camera_names))]
 
     def forward(self, qpos, image, env_state, actions=None, is_pad=None):
         """
@@ -111,22 +112,22 @@ class DETRVAE(nn.Module):
             slam_embed = self.encoder_joint_proj_slam(qpos[:, 0:self.pos_dim])
             phase1_embed = self.encoder_joint_proj_phase1(qpos[:, self.pos_dim:self.pos_dim*2])
 
-            qpos_embed = torch.unsqueeze(qpos_embed, axis=1)  # (bs, 1, hidden_dim)
-            slam_embed = torch.unsqueeze(slam_embed, axis = 1)
-            phase1_embed = torch.unsqueeze(phase1_embed, axis = 1)
+            qpos_embed = torch.unsqueeze(qpos_embed, dim=1)  # (bs, 1, hidden_dim)
+            slam_embed = torch.unsqueeze(slam_embed, dim=1)
+            phase1_embed = torch.unsqueeze(phase1_embed, dim=1)
             
             cls_embed = self.cls_embed.weight # (1, hidden_dim)
-            cls_embed = torch.unsqueeze(cls_embed, axis=0).repeat(bs, 1, 1) # (bs, 1, hidden_dim)
+            cls_embed = torch.unsqueeze(cls_embed, dim=0).repeat(bs, 1, 1) # (bs, 1, hidden_dim)
             
             if self.num_qpos == 2:
-                encoder_input = torch.cat([cls_embed, slam_embed, phase1_embed, action_embed], axis=1) # (bs, seq+1, hidden_dim)
+                encoder_input = torch.cat([cls_embed, slam_embed, phase1_embed, action_embed], dim=1) # (bs, seq+1, hidden_dim)
             else:
-                encoder_input = torch.cat([cls_embed, qpos_embed, action_embed], axis=1) # (bs, seq+1, hidden_dim)
+                encoder_input = torch.cat([cls_embed, qpos_embed, action_embed], dim=1) # (bs, seq+1, hidden_dim)
             
             encoder_input = encoder_input.permute(1, 0, 2) # (seq+1, bs, hidden_dim)
             # do not mask cls token
             cls_joint_is_pad = torch.full((bs, 1 + self.num_qpos), False).to(qpos.device) # False: not a padding
-            is_pad = torch.cat([cls_joint_is_pad, is_pad], axis=1)  # (bs, seq+1)
+            is_pad = torch.cat([cls_joint_is_pad, is_pad], dim=1)  # (bs, seq+1)
             # obtain position embedding
             pos_embed = self.pos_table.clone().detach()
             pos_embed = pos_embed.permute(1, 0, 2)  # (seq+1, 1, hidden_dim)
@@ -149,18 +150,22 @@ class DETRVAE(nn.Module):
             all_cam_pos = []
             for cam_id, cam_name in enumerate(self.camera_names):
                 
-                '''Use cached information to skip backbone computation'''
-                if image.ndimension() > 1:
-                    print("Using backbone, ", image.ndimension())
-                    features, pos = self.backbones[0](image[:, cam_id]) # HARDCODED
-                    # Cache up the features and pos 
-                    self.prev_backbone_result[cam_id] = (features, pos)
-                elif self.prev_backbone_result[cam_id] is not None:
-                    # We use the cached information
-                    print("Skip backbone")
-                    features, pos = self.prev_backbone_result[cam_id]
-                else:
-                    raise ValueError("Image is None and there is no cached information")
+                # '''Use cached information to skip backbone computation'''
+                # if image.dim() > 1:
+                #     print("Using backbone, ", image.dim())
+                #     features, pos = self.backbones[0](image[:, cam_id]) # HARDCODED
+                #     # Cache up the features and pos 
+                #     self.prev_backbone_result[cam_id] = (features, pos)
+                    
+                # elif self.prev_backbone_result[cam_id] is not None:
+                #     # We use the cached information
+                #     print("Skip backbone")
+                #     features, pos = self.prev_backbone_result[cam_id]
+                # else:
+                #     raise ValueError("Image is None and there is no cached information")
+                
+                features, pos = self.backbones[0](image[:, cam_id]) # HARDCODED
+                # Cache up the features and pos 
 
                 features = features[0] # take the last layer feature
                 pos = pos[0]
@@ -173,8 +178,8 @@ class DETRVAE(nn.Module):
             proprio_phase1 = self.input_proj_phase1(qpos[:, self.pos_dim:self.pos_dim * 2])
 
             # fold camera dimension into width dimension
-            src = torch.cat(all_cam_features, axis=3)
-            pos = torch.cat(all_cam_pos, axis=3)
+            src = torch.cat(all_cam_features, dim=3)
+            pos = torch.cat(all_cam_pos, dim=3)
 
             # If num_qpos is 1, we just 
             if self.num_qpos == 1:
@@ -199,24 +204,24 @@ class DETRVAE(nn.Module):
 
         
 
-        if DIM == 7:
+        # if DIM == 7:
             # noramlize the quat results
-            norm = torch.sqrt(a_hat[:,:, 3]**2 + a_hat[:,:, 4]**2 + a_hat[:,:, 5]**2 + a_hat[:,:, 6]**2)
-            tmp = a_hat[:,:,3:7] / norm.unsqueeze(2)
-            # print(a_hat[:,:,:3].shape, tmp.shape)
-            # print(tmp[0])
-            a_hat = torch.cat([a_hat[:,:,:3], tmp], axis = 2)
-        elif DIM == 9:
+        norm = torch.sqrt(a_hat[:,:, 3]**2 + a_hat[:,:, 4]**2 + a_hat[:,:, 5]**2 + a_hat[:,:, 6]**2)
+        tmp = a_hat[:,:,3:7] / norm.unsqueeze(2)
+        # print(a_hat[:,:,:3].shape, tmp.shape)
+        # print(tmp[0])
+        a_hat = torch.cat([a_hat[:,:,:3], tmp], dim = 2)
+        # elif DIM == 9:
 
-            norm_yaw = torch.sqrt(a_hat[:,:, 3]**2 + a_hat[:,:, 4]**2)
-            norm_pitch = torch.sqrt(a_hat[:,:, 5]**2 + a_hat[:,:, 6]**2)
-            norm_roll = torch.sqrt(a_hat[:,:, 7]**2 + a_hat[:,:, 8]**2)
+        #     norm_yaw = torch.sqrt(a_hat[:,:, 3]**2 + a_hat[:,:, 4]**2)
+        #     norm_pitch = torch.sqrt(a_hat[:,:, 5]**2 + a_hat[:,:, 6]**2)
+        #     norm_roll = torch.sqrt(a_hat[:,:, 7]**2 + a_hat[:,:, 8]**2)
 
-            yaw = a_hat[:,:,3:5] / norm_yaw.unsqueeze(2)
-            pitch = a_hat[:,:,5:7] / norm_pitch.unsqueeze(2)
-            roll = a_hat[:,:,7:9] / norm_roll.unsqueeze(2)
+        #     yaw = a_hat[:,:,3:5] / norm_yaw.unsqueeze(2)
+        #     pitch = a_hat[:,:,5:7] / norm_pitch.unsqueeze(2)
+        #     roll = a_hat[:,:,7:9] / norm_roll.unsqueeze(2)
 
-            a_hat = torch.cat([a_hat[:,:,:3], yaw, pitch, roll], axis = 2)
+        #     a_hat = torch.cat([a_hat[:,:,:3], yaw, pitch, roll], axis = 2)
 
 
         # elif DIM == 6: 

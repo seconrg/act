@@ -125,13 +125,10 @@ def main(args):
         results = []
         for ckpt_name in ckpt_names:
             # success_rate, avg_return = eval_bc(config, ckpt_name, save_episode=True)
-            eval_bc_euroc(config, ckpt_name)
-            # results.append([ckpt_name, success_rate, avg_return])
-
-        # for ckpt_name, success_rate, avg_return in results:
-        #     print(f'{ckpt_name}: {success_rate=} {avg_return=}')
-        print()
-        # exit()
+            for test_idx in test_indices:
+                print("Test index is:", test_idx)
+                eval_bc_euroc(config, ckpt_name, test_idx)
+        
         return
     # train_dataloader, val_dataloader, stats, _ = load_data(dataset_dir, num_episodes, camera_names, batch_size_train, batch_size_val)
 
@@ -158,8 +155,8 @@ def main(args):
         param_file.write("encoder layers: "+ str(policy_config['enc_layers']) + "\n")
         param_file.write("dec_layers: "+ str(policy_config['dec_layers']) + "\n")
         param_file.write("nheads: "+ str(policy_config['nheads']) + "\n")
-        param_file.write("test_index: "+ str(TEST_IDX) + "\n")
-        param_file.write("test_name: "+ MSD_LIST[TEST_IDX] + "\n")
+        # param_file.write("test_index: "+ str(TEST_IDX) + "\n")
+        # param_file.write("test_name: "+ MSD_LIST[TEST_IDX] + "\n")
 
 
 
@@ -197,7 +194,7 @@ def get_image(ts, camera_names):
     return curr_image
 
 
-def eval_bc_euroc(config, ckpt_name):
+def eval_bc_euroc(config, ckpt_name, test_idx):
     set_seed(1000)
     ckpt_dir = config['ckpt_dir']
     state_dim = config['state_dim']
@@ -222,7 +219,7 @@ def eval_bc_euroc(config, ckpt_name):
     print(f'Loaded: {ckpt_path}')
 
     # get the dataset
-    dataset = load_test_euroc(TEST_IDX, policy_class)
+    dataset = load_test_euroc(test_idx, policy_class)
 
     groundtruth = dataset.getGroundtruth()
     slam_output = dataset.getSlamSource()

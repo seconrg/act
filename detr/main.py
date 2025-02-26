@@ -68,6 +68,7 @@ def get_args_parser():
 
 
 def build_ACT_model_and_optimizer(args_override):
+    print("act module: ", args_override)
     parser = argparse.ArgumentParser('DETR training and evaluation script', parents=[get_args_parser()])
     args = parser.parse_args()
 
