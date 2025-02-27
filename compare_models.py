@@ -147,7 +147,7 @@ def fetch_result(args):
 
         # Get the transformer models
         for prefix in prefix_list:
-            actions = pd.read_csv(prefix + "res_" + str(window) + ".csv").to_numpy()[:,:6]
+            actions = pd.read_csv(prefix + str(idx) + "_res_" + str(window) + ".csv").to_numpy()[:,:6]
             print(len(actions))
 
             groundtruth = groundtruth[window: min(len(actions) + window, len(groundtruth))]

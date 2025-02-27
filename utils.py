@@ -146,20 +146,6 @@ class EuroCStyleDataset(torch.utils.data.Dataset):
         slam_pose = observation_raw[:, 1:INPUT_DIM+1]
         phase1_pose = observation_raw[:, INPUT_DIM+2:INPUT_DIM*2+2]
 
-        # phase0_phase1_interval = observation_raw[:, 16:17]
-        '''Pre-process the data so that it contains only the delta of position shift'''
-        # # Construct phase1 delta
-        # phase1_pose = computePoseDiffFromNumpy6D(slam_pose[1:], phase1_pose[1:])
-        # # Construct SLAM pose data
-        # slam_pose0 = slam_pose[:-1]
-        # slam_pose1 = slam_pose[1:]
-        # slam_pose = computePoseDiffFromNumpy6D(slam_pose1, slam_pose0)
-
-        # # Construct groundtruth data
-        # groundtruth0 = groundtruth[:-1]
-        # groundtruth1 = groundtruth[1:]
-        # groundtruth = computePoseDiffFromNumpy6D(groundtruth1, groundtruth0)
-
         observation = np.hstack([slam_pose, phase1_pose])
         # observation = np.hstack([slam_pose, phase0_phase1_interval, phase1_pose])
 
@@ -179,8 +165,8 @@ class EuroCStyleDataset(torch.utils.data.Dataset):
         
         # For qos, we include the current slam observation & prediction
         qpos = observation[start_ts]
-        left_image = np.asarray(cv2.imread(camera_path[start_ts + 1][1]))
-        right_image = np.asarray(cv2.imread(camera_path[start_ts + 1][3]))
+        left_image = np.asarray(cv2.imread(camera_path[start_ts][1]))
+        right_image = np.asarray(cv2.imread(camera_path[start_ts][3]))
 
         # Load the image from information
         all_cam_images = [left_image, right_image]
@@ -211,9 +197,9 @@ class EuroCStyleDataset(torch.utils.data.Dataset):
 
         return image_data, qpos_data, action_data, is_pad
 
-    def getImagePoseAt(self, index, batch_size):
+    def getImagePoseAt(self, index, batch_size, episode_idx):
 
-        episode_id = TEST_IDX
+        episode_id = episode_idx
 
         observation_path = self.id2datasetpath[episode_id]
         camera_path = self.id2camerapaths[episode_id]
@@ -224,18 +210,22 @@ class EuroCStyleDataset(torch.utils.data.Dataset):
         phase1_pose = observation_raw[:, INPUT_DIM+2:INPUT_DIM*2+2]
 
         # '''Pre-process the data so that it contains only the delta of position shift'''
-        # # Construct phase1 delta
-        # phase1_pose = computePoseDiffFromNumpy6D(slam_pose[1:], phase1_pose[1:])
-        # # Construct SLAM pose data
+        # # # Construct phase1 delta
+        # # phase1_pose = computePoseDiffFromNumpy6D(slam_pose[1:], phase1_pose[1:])
+        # phase1_pose0 = phase1_pose[1:]
+        # phase1_pose1 = phase1_pose[:-1]
+        # delta_phase1_pose = computePoseDiffFromNumpy6D(phase1_pose0, phase1_pose1)
+        # phase1_pose = np.hstack([phase1_pose[:,:3], delta_phase1_pose[:, 3:]])
+        
+        # # # Construct SLAM pose data
         # slam_pose0 = slam_pose[:-1]
         # slam_pose1 = slam_pose[1:]
-        # slam_pose = computePoseDiffFromNumpy6D(slam_pose1, slam_pose0)
+        # delta_slam_pose = computePoseDiffFromNumpy6D(slam_pose1, slam_pose0)
+        # # Use delta pose for the angle, but absolute pose for the position
+        # slam_pose = np.hstack([slam_pose[:,:3], delta_slam_pose[:, 3:]])
+        # ''' End pre-process for delta value'''
 
-        # # Construct groundtruth data
-        # groundtruth0 = groundtruth[:-1]
-        # groundtruth1 = groundtruth[1:]
-        # groundtruth = computePoseDiffFromNumpy6D(groundtruth1, groundtruth0)
-
+        
         observation = np.hstack([slam_pose, phase1_pose])
         
         camera_path = pd.read_csv(camera_path).to_numpy()
@@ -286,9 +276,26 @@ class EuroCStyleDataset(torch.utils.data.Dataset):
 
         return res_image, res_qpos
     
-    def getGroundtruth(self):
+    def getDeltaGroundtruth(self, idx):
 
-        episode_id = TEST_IDX
+        episode_id = idx
+
+        groundtruth_path = self.id2gtpath[episode_id]
+        groundtruth_raw = pd.read_csv(groundtruth_path).to_numpy()
+        groundtruth = groundtruth_raw[:, 1:INPUT_DIM+1]
+        
+        # '''Pre-process the data so that it contains only the delta of angle shift'''
+        # # Construct groundtruth data
+        # groundtruth0 = groundtruth[:-1]
+        # groundtruth1 = groundtruth[1:]
+        # delta_groundtruth = computePoseDiffFromNumpy6D(groundtruth1, groundtruth0)
+        # groundtruth = np.hstack([groundtruth[:,:3], delta_groundtruth[:, 3:]])
+        # ''' End pre-process for delta value'''
+
+        return groundtruth
+    
+    def getGroundtruth(self, idx):
+        episode_id = idx
 
         groundtruth_path = self.id2gtpath[episode_id]
         groundtruth_raw = pd.read_csv(groundtruth_path).to_numpy()
@@ -296,9 +303,9 @@ class EuroCStyleDataset(torch.utils.data.Dataset):
         return groundtruth
     
 
-    def getSlamSource(self):
+    def getSlamSource(self, idx):
 
-        episode_id = TEST_IDX
+        episode_id = idx
 
         observation_path = self.id2datasetpath[episode_id]
         observation_raw = pd.read_csv(observation_path).to_numpy()
@@ -415,6 +422,24 @@ class EuroCStyleDatasetForSimpleTransformer(torch.utils.data.Dataset):
         groundtruth_path = self.id2gtpath[episode_id]
         groundtruth_raw = pd.read_csv(groundtruth_path).to_numpy()
         groundtruth = groundtruth_raw[:, 1:INPUT_DIM+1]
+        return groundtruth
+    
+    def getDeltaGroundtruth(self):
+        
+        episode_id = self.episode_id
+
+        groundtruth_path = self.id2gtpath[episode_id]
+        groundtruth_raw = pd.read_csv(groundtruth_path).to_numpy()
+        groundtruth = groundtruth_raw[:, 1:INPUT_DIM+1]
+        
+        '''Pre-process the data so that it contains only the delta of angle shift'''
+        # Construct groundtruth data
+        groundtruth0 = groundtruth[:-1]
+        groundtruth1 = groundtruth[1:]
+        delta_groundtruth = computePoseDiffFromNumpy6D(groundtruth1, groundtruth0)
+        groundtruth = np.hstack([groundtruth[:,:3], delta_groundtruth[:, 3:]])
+        ''' End pre-process for delta value'''
+
         return groundtruth
     
     def getSlamSource(self):

@@ -64,8 +64,8 @@ class ACTPolicy(nn.Module):
             loss_dict = dict()
 
             # TODO: Change this loss function 
-            # all_l1 = F.l1_loss(actions, a_hat, reduction='none')
-            all_l1 = custom_loss_quat(actions, a_hat)
+            all_l1 = F.l1_loss(actions, a_hat, reduction='none')
+            # all_l1 = custom_loss_quat(actions, a_hat)
 
             # all_l1 = custom_loss(actions, a_hat)
 

@@ -121,14 +121,20 @@ def main(args):
     }
 
     if is_eval:
+        # ckpt_names = [f'policy_best.ckpt']
         ckpt_names = [f'policy_best.ckpt']
         results = []
         for ckpt_name in ckpt_names:
             # success_rate, avg_return = eval_bc(config, ckpt_name, save_episode=True)
             for test_idx in test_indices:
-                print("Test index is:", test_idx)
+                print("test idx:", test_idx)
                 eval_bc_euroc(config, ckpt_name, test_idx)
-        
+            # results.append([ckpt_name, success_rate, avg_return])
+
+        # for ckpt_name, success_rate, avg_return in results:
+        #     print(f'{ckpt_name}: {success_rate=} {avg_return=}')
+        print()
+        # exit()
         return
     # train_dataloader, val_dataloader, stats, _ = load_data(dataset_dir, num_episodes, camera_names, batch_size_train, batch_size_val)
 
@@ -221,8 +227,8 @@ def eval_bc_euroc(config, ckpt_name, test_idx):
     # get the dataset
     dataset = load_test_euroc(test_idx, policy_class)
 
-    groundtruth = dataset.getGroundtruth()
-    slam_output = dataset.getSlamSource()
+    # groundtruth = dataset.getDeltaGroundtruth(test_idx)
+    groundtruth = dataset.getGroundtruth(test_idx)
 
     gt_length = len(groundtruth)
 
@@ -267,7 +273,7 @@ def eval_bc_euroc(config, ckpt_name, test_idx):
                 inference_times.append((time_end - time_begin) / MS_TO_NS)
             else:
 
-                image, qpos = dataset.getImagePoseAt(t, batch_size)
+                image, qpos = dataset.getImagePoseAt(t, batch_size, test_idx)
                 print("qpos shape is: ", qpos.shape)
 
                 # Replace qpos with the latest ACT output
@@ -355,7 +361,7 @@ def eval_bc_euroc(config, ckpt_name, test_idx):
             
 
         for window, action_window in zip(prediction_window, action_windows):
-            with open(prefix + '/' + "res_" + str(window) + ".csv", "w") as res:
+            with open( prefix + '/' + str(test_idx) + "_res_" + str(window) + ".csv", "w") as res:
                 res.write(header)
                 # res.write("x, y, z, yaw, pitch, row")
                 csv_writer = csv.writer(res)
@@ -375,6 +381,7 @@ def eval_bc_euroc(config, ckpt_name, test_idx):
             ax.plot(data_sorted, cdf, label="Phase2 error rate with window " + str(window))
 
         # Draw the source errors
+        slam_output = dataset.getSlamSource(test_idx)
         pose_diff_computed_slam_and_gt_slam, \
         angle_diff_computed_slam_and_gt_slam = computePoseDiffFromNumpy(slam_output, groundtruth)
         
@@ -387,14 +394,14 @@ def eval_bc_euroc(config, ckpt_name, test_idx):
         fig.savefig("res_act.png")
 
 
-def compute_result_from_euler_file(args):
+def compute_result_from_euler_file(args, idx):
 
     policy_class = args['policy_class']
 
     # Read the groundtruth
-    dataset = load_test_euroc(TEST_IDX, policy_class)
-    groundtruth = dataset.getGroundtruth()
-    slam_output = dataset.getSlamSource()
+    dataset = load_test_euroc(idx, policy_class)
+    # groundtruth = dataset.getDeltaGroundtruth(idx)
+    groundtruth = dataset.getGroundtruth(idx)
 
     fig_pos, ax_pos = plt.subplots()
     fig_orient, ax_orient = plt.subplots(3)
@@ -405,7 +412,7 @@ def compute_result_from_euler_file(args):
     error_rate = []
 
     for window in prediction_window:
-        actions = pd.read_csv(prefix + "res_" + str(window) + ".csv").to_numpy()[:,:6]
+        actions = pd.read_csv(prefix + str(idx) + "_res_" + str(window) + ".csv").to_numpy()[:,:7]
         print("actions length: ", len(actions))
         print("groundtruth length: ", len(groundtruth))
 
@@ -444,9 +451,11 @@ def compute_result_from_euler_file(args):
         if window == 10:
             error_rate = np.column_stack([pose_diff_list, yaw_list, pitch_list, roll_list])
             print("return error rate shape is:", error_rate.shape)
+    
 
+    slam_output = dataset.getSlamSource(idx)
     pose_diff_computed_slam_and_gt_slam, \
-    angle_diff_computed_slam_and_gt_slam = computePoseDiffFromNumpy(slam_output, dataset.getGroundtruth())
+    angle_diff_computed_slam_and_gt_slam = computePoseDiffFromNumpy(slam_output, dataset.getGroundtruth(idx))
 
     print("SLAM source average error:", 
           np.average(pose_diff_computed_slam_and_gt_slam, axis=0),
@@ -759,6 +768,7 @@ if __name__ == '__main__':
     parser.add_argument('--dim_feedforward', action='store', type=int, help='dim_feedforward', required=False)
     parser.add_argument('--temporal_agg', action='store_true')
     
-    main(vars(parser.parse_args()))
-
-    compute_result_from_euler_file(vars(parser.parse_args()))
+    # main(vars(parser.parse_args()))
+    
+    for test_idx in test_indices:
+        compute_result_from_euler_file(vars(parser.parse_args()), test_idx)
